@@ -73,8 +73,8 @@ export function PromptForm({ open, onOpenChange, onSubmit, initial }: Props) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/40 backdrop-blur-sm" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-surface rounded-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto shadow-elevated">
+        <Dialog.Overlay className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[60]" />
+        <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-surface rounded-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto shadow-elevated z-[60]">
           <Dialog.Title className="text-xl font-medium text-primary mb-6">
             {initial ? "编辑提示词" : "新建提示词"}
           </Dialog.Title>
