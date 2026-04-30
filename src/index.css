@@ -59,4 +59,23 @@
   .tag-chip-interactive {
     @apply tag-chip cursor-pointer transition-colors duration-150 hover:bg-orange-200;
   }
+
+  .prompt-item::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    background: radial-gradient(
+      250px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+      rgba(255, 237, 213, 0.5),
+      transparent 80%
+    );
+    pointer-events: none;
+  }
+
+  .prompt-item:hover::before {
+    opacity: 1;
+  }
 }
