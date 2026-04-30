@@ -4,7 +4,7 @@ import re
 import os
 import urllib.request
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://vczkjxpgzbzkobfxoene.supabase.co")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 CATEGORY_MAP = {
