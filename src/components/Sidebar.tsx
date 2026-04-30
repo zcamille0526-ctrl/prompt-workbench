@@ -69,7 +69,7 @@ export function Sidebar({
               : "text-white/70 hover:bg-white/10"
           }`}
         >
-          全部
+          全部分类
         </button>
         {CATEGORIES.map((cat) => (
           <button

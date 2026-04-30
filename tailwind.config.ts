@@ -16,7 +16,7 @@ const config: Config = {
         "text-secondary": "#FFFFFF",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+        sans: ["Inter", "'Noto Sans SC'", "system-ui", "-apple-system", "sans-serif"],
       },
       borderRadius: {
         sm: "6px",

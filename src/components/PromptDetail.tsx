@@ -49,22 +49,26 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
     <div className="flex-1 overflow-y-auto p-6">
       <div className="flex items-start justify-between mb-4">
         <div>
-          <h2 className="text-xl font-medium text-primary">
-            {prompt.title}
-          </h2>
-          <div className="flex gap-1 mt-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-medium text-primary">
+              {prompt.title}
+            </h2>
             <span className="category-chip">
               {prompt.category}
             </span>
-            {prompt.tags.map((tag) => (
-              <span
-                key={tag}
-                className="tag-chip"
-              >
-                {tag}
-              </span>
-            ))}
           </div>
+          {prompt.tags.length > 0 && (
+            <div className="flex gap-1 mt-2">
+              {prompt.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="tag-chip"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex gap-2">
           <button
