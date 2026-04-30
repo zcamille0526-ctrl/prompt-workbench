@@ -73,29 +73,29 @@ export function PromptForm({ open, onOpenChange, onSubmit, initial }: Props) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/40" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto shadow-lg">
-          <Dialog.Title className="text-lg font-semibold mb-4">
+        <Dialog.Overlay className="fixed inset-0 bg-black/40 backdrop-blur-sm" />
+        <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-surface rounded-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-y-auto shadow-elevated">
+          <Dialog.Title className="text-xl font-medium text-primary mb-6">
             {initial ? "编辑提示词" : "新建提示词"}
           </Dialog.Title>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="text-sm text-gray-700">标题</label>
+              <label className="text-sm font-medium text-text-primary">标题</label>
               <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md mt-1"
+                className="input-field mt-1"
               />
             </div>
 
             <div>
-              <label className="text-sm text-gray-700">分类</label>
+              <label className="text-sm font-medium text-text-primary">分类</label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md mt-1"
+                className="input-field mt-1"
               >
                 <option value="">请选择</option>
                 {CATEGORIES.map((cat) => (
@@ -105,35 +105,35 @@ export function PromptForm({ open, onOpenChange, onSubmit, initial }: Props) {
             </div>
 
             <div>
-              <label className="text-sm text-gray-700">标签（逗号分隔）</label>
+              <label className="text-sm font-medium text-text-primary">标签（逗号分隔）</label>
               <input
                 type="text"
                 value={tagsInput}
                 onChange={(e) => setTagsInput(e.target.value)}
                 placeholder="如：儿童, 科普, 绘本"
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md mt-1"
+                className="input-field mt-1"
               />
             </div>
 
             <div>
-              <label className="text-sm text-gray-700">
+              <label className="text-sm font-medium text-text-primary">
                 内容（支持 Markdown，用 {"{{变量名}}"} 定义变量）
               </label>
               <textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 rows={12}
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md mt-1 font-mono"
+                className="input-field mt-1 font-mono"
               />
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm text-gray-700">变量定义</label>
+                <label className="text-sm font-medium text-text-primary">变量定义</label>
                 <button
                   type="button"
                   onClick={addVariable}
-                  className="text-xs text-blue-600 hover:text-blue-700"
+                  className="text-xs font-medium text-secondary hover:text-orange-300"
                 >
                   + 添加变量
                 </button>
@@ -145,19 +145,19 @@ export function PromptForm({ open, onOpenChange, onSubmit, initial }: Props) {
                     value={v.name}
                     onChange={(e) => updateVariable(i, "name", e.target.value)}
                     placeholder="变量名"
-                    className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded"
+                    className="input-field"
                   />
                   <input
                     type="text"
                     value={v.default || ""}
                     onChange={(e) => updateVariable(i, "default", e.target.value)}
                     placeholder="默认值（可选）"
-                    className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded"
+                    className="input-field"
                   />
                   <button
                     type="button"
                     onClick={() => removeVariable(i)}
-                    className="text-red-500 text-sm px-2 hover:text-red-700"
+                    className="text-error text-sm px-2 hover:text-red-700"
                   >
                     删除
                   </button>
@@ -166,25 +166,25 @@ export function PromptForm({ open, onOpenChange, onSubmit, initial }: Props) {
             </div>
 
             <div>
-              <label className="text-sm text-gray-700">创建人</label>
+              <label className="text-sm font-medium text-text-primary">创建人</label>
               <input
                 type="text"
                 value={createdBy}
                 onChange={(e) => setCreatedBy(e.target.value)}
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md mt-1"
+                className="input-field mt-1"
               />
             </div>
 
-            {error && <p className="text-red-500 text-sm">{error}</p>}
+            {error && <p className="text-error text-sm">{error}</p>}
 
             <div className="flex justify-end gap-2 pt-2">
-              <Dialog.Close className="px-3 py-1.5 text-sm border border-gray-300 rounded-md hover:bg-gray-50">
+              <Dialog.Close className="btn-secondary">
                 取消
               </Dialog.Close>
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                className="btn-primary disabled:opacity-50"
               >
                 {isSubmitting ? "保存中..." : "保存"}
               </button>

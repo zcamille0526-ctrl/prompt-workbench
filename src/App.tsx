@@ -96,7 +96,7 @@ function AuthenticatedApp() {
 
   if (isLoading) {
     return (
-      <div className="h-screen flex items-center justify-center text-gray-400">
+      <div className="h-screen flex items-center justify-center text-text-primary">
         加载中...
       </div>
     );
@@ -137,7 +137,7 @@ function AuthenticatedApp() {
               onDelete={() => setDeleteOpen(true)}
             />
           ) : (
-            <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+            <div className="flex-1 flex items-center justify-center text-text-primary text-sm">
               选择一个提示词查看详情
             </div>
           )

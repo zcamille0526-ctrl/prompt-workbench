@@ -17,12 +17,12 @@ export function PasswordGate({ onLogin, isLoading, error }: Props) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center bg-background">
       <form
         onSubmit={handleSubmit}
-        className="bg-white p-8 rounded-lg shadow-md w-full max-w-sm"
+        className="bg-surface p-8 rounded-xl shadow-elevated w-full max-w-sm"
       >
-        <h1 className="text-xl font-semibold text-gray-900 mb-6 text-center">
+        <h1 className="text-xl font-medium text-primary mb-6 text-center">
           提示词工作台
         </h1>
         <label className="sr-only" htmlFor="password-input">访问密码</label>
@@ -32,16 +32,16 @@ export function PasswordGate({ onLogin, isLoading, error }: Props) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="请输入访问密码"
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+          className="input-field mb-4"
           autoFocus
         />
         {error && (
-          <p className="text-red-500 text-sm mb-4">{error}</p>
+          <p className="text-error text-sm mb-4">{error}</p>
         )}
         <button
           type="submit"
           disabled={isLoading || !password.trim()}
-          className="w-full py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isLoading ? "验证中..." : "进入"}
         </button>
