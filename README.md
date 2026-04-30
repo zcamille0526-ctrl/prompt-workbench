@@ -1,73 +1,84 @@
-# React + TypeScript + Vite
+# 提示词工作台 Prompt Workbench
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+多人共享的提示词管理工具。集中存储、分类、搜索和复用提示词模板。
 
-Currently, two official plugins are available:
+线上地址：https://prompt-workbench-three.vercel.app
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 功能
 
-## React Compiler
+- 提示词增删改查，支持 Markdown 格式
+- 按大类筛选（生图 / 生文 / 分析 / 开发 / 元提示词）
+- 标签过滤和关键词搜索
+- 变量模板：用 `{{变量名}}` 定义占位符，使用时填入具体值，一键复制
+- 多人实时同步（Supabase Realtime）
+- 导出全部提示词为 JSON 文件
+- 共享密码访问，无需注册
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 技术栈
 
-## Expanding the ESLint configuration
+- React + TypeScript
+- Radix UI + Tailwind CSS
+- Zod（数据校验）
+- Supabase（PostgreSQL + Realtime）
+- Vercel（部署 + Serverless Functions）
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## 本地开发
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### 1. 安装依赖
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### 2. 配置环境变量
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+复制 `.env.example` 为 `.env.local`，填入你的配置：
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cp .env.example .env.local
 ```
+
+需要填写：
+- `SHARED_PASSWORD` — 访问密码
+- `SUPABASE_URL` — Supabase 项目地址
+- `SUPABASE_SERVICE_ROLE_KEY` — Supabase service role 密钥
+- `SUPABASE_ANON_KEY` — Supabase anon 公钥
+- `VITE_SUPABASE_URL` — 同 SUPABASE_URL
+- `VITE_SUPABASE_ANON_KEY` — 同 SUPABASE_ANON_KEY
+
+### 3. 初始化数据库
+
+在 Supabase SQL Editor 中执行 `supabase/migrations/001_create_prompts.sql`。
+
+### 4. 启动开发服务器
+
+```bash
+# 启动 API 服务
+npx tsx --env-file=.env.local dev-server.ts &
+
+# 启动前端
+npm run dev
+```
+
+打开 http://localhost:5173
+
+### 5. 运行测试
+
+```bash
+npm test
+```
+
+## 批量导入提示词
+
+将提示词整理为 Markdown 文件，用 `# ==标题==` 分隔每条提示词，然后修改 `scripts/import-prompts.py` 中的分类和标签映射，执行：
+
+```bash
+SUPABASE_SERVICE_ROLE_KEY="your-key" python3 scripts/import-prompts.py
+```
+
+## 部署到 Vercel
+
+1. Fork 本仓库
+2. 在 Vercel 中导入项目
+3. 配置环境变量（同 `.env.example` 中的字段）
+4. 部署
