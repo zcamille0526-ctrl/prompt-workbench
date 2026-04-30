@@ -22,7 +22,7 @@ export function Sidebar({
   onClearTag,
 }: Props) {
   return (
-    <aside className="w-60 bg-primary text-white flex flex-col h-full rounded-xl">
+    <aside className="w-60 bg-primary text-white flex flex-col h-full rounded-lg">
       <div className="p-4">
         <h2 className="text-lg font-medium text-white mb-4">
           提示词工作台

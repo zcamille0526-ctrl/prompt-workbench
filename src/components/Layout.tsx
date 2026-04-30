@@ -32,20 +32,20 @@ export function Layout({ sidebar, list, detail }: Props) {
 
       {/* Sidebar */}
       <div
-        className={`fixed md:static z-50 h-full transition-transform md:translate-x-0 rounded-xl overflow-hidden ${
+        className={`fixed md:static z-50 transition-transform md:translate-x-0 rounded-lg overflow-hidden self-stretch ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div onClick={() => setSidebarOpen(false)}>{sidebar}</div>
+        <div className="h-full" onClick={() => setSidebarOpen(false)}>{sidebar}</div>
       </div>
 
       {/* List */}
-      <div className="w-full md:w-80 flex flex-col bg-surface rounded-xl shadow-card overflow-hidden">
+      <div className="w-full md:w-80 flex flex-col bg-surface rounded-lg shadow-card overflow-hidden">
         {list}
       </div>
 
       {/* Detail */}
-      <div className="hidden md:flex flex-1 flex-col bg-surface rounded-xl shadow-card overflow-hidden">{detail}</div>
+      <div className="hidden md:flex flex-1 flex-col bg-surface rounded-lg shadow-card overflow-hidden">{detail}</div>
     </div>
   );
 }

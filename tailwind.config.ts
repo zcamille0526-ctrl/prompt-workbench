@@ -16,13 +16,13 @@ const config: Config = {
         "text-secondary": "#FFFFFF",
       },
       fontFamily: {
-        sans: ["Inter", "'Noto Sans SC'", "system-ui", "-apple-system", "sans-serif"],
+        sans: ["Inter", "'Noto Sans SC'", "system-ui", "sans-serif"],
       },
       borderRadius: {
         sm: "6px",
-        DEFAULT: "20px",
-        lg: "28px",
-        xl: "32px",
+        DEFAULT: "10px",
+        lg: "12px",
+        xl: "16px",
         full: "9999px",
       },
       boxShadow: {
