@@ -53,7 +53,7 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
             {prompt.title}
           </h2>
           <div className="flex gap-1 mt-1">
-            <span className="tag-chip">
+            <span className="category-chip">
               {prompt.category}
             </span>
             {prompt.tags.map((tag) => (

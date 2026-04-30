@@ -51,7 +51,7 @@ export function PromptList({ prompts, selectedId, onSelect, onTagClick }: Props)
               {prompt.title}
             </div>
             <div className="text-xs mt-1 flex flex-wrap gap-1">
-              <span className="tag-chip">
+              <span className="category-chip">
                 {prompt.category}
               </span>
               {prompt.tags.slice(0, 3).map((tag) => (

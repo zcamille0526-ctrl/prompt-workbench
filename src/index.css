@@ -52,6 +52,10 @@
            transition-all duration-150 placeholder:text-gray-400;
   }
 
+  .category-chip {
+    @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-primary text-white;
+  }
+
   .tag-chip {
     @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-secondary text-primary;
   }
