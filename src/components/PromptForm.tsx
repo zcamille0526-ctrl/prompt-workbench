@@ -155,7 +155,7 @@ export function PromptForm({
                     type="button"
                     onClick={() => setContent(PROMPT_TEMPLATE)}
                     disabled={content.trim() !== ""}
-                    className="text-xs font-medium text-secondary hover:text-orange-300 disabled:text-gray-400 disabled:cursor-not-allowed"
+                    className="text-xs font-medium text-primary hover:text-orange-600 disabled:text-gray-400 disabled:cursor-not-allowed"
                     title={
                       content.trim() !== ""
                         ? "内容不为空时无法插入模板，避免覆盖已有内容"
@@ -180,7 +180,7 @@ export function PromptForm({
                 <button
                   type="button"
                   onClick={addVariable}
-                  className="text-xs font-medium text-secondary hover:text-orange-300"
+                  className="text-xs font-medium text-primary hover:text-orange-600"
                 >
                   + 添加变量
                 </button>

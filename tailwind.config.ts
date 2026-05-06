@@ -16,7 +16,17 @@ const config: Config = {
         "text-secondary": "#FFFFFF",
       },
       fontFamily: {
-        sans: ["Inter", "'Noto Sans SC'", "system-ui", "sans-serif"],
+        sans: [
+          "Inter",
+          "'Noto Sans SC'",
+          // 系统中文字体栈作为 fallback：在 Noto Sans SC 加载完成前
+          // 直接用本机已有的字体，避免显示系统默认（如 Windows 宋体）
+          "'PingFang SC'", // macOS / iOS
+          "'Microsoft YaHei'", // Windows
+          "'Source Han Sans CN'", // Adobe 思源黑体
+          "system-ui",
+          "sans-serif",
+        ],
       },
       borderRadius: {
         sm: "6px",
