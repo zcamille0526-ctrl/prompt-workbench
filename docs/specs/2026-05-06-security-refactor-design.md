@@ -439,14 +439,14 @@ CI 中跑这个脚本，不通过则构建失败。规则可以演进，但要�
 1. **anon key 失效验证**：用浏览器开发者工具尝试用旧的 anon key 直接访问 Supabase REST API，应返回 401 或空数组
 2. **轮询基本功能**：A 用户新建 prompt → B 用户应该在 30 秒内看到（标签页保持可见）
 3. **后台标签页不轮询**：B 切到其他标签页 → 网络面板不应再有 `/api/prompts` 请求；切回来立即触发一次
-4. **字段 allowlist**：用 `curl` POST 一个包含 `id` 或 `created_at` 字段的 payload → 写入数据库时这些字段被忽略，使用数据库默认值
+4. **strict schema 拒绝未知字段**：用 `curl` POST 一个包含 `id`、`created_at`、`use_count` 或任意未知字段的 payload → 后端立即返回 **400** 并附带 `details` 列出违规字段，**不写入数据库**。这是 strict Zod schema 的预期行为，allowlist 是防御纵深而非主防线。
 
 ### 9.2 自动化测试
 
 测试框架沿用项目已有的 Vitest（无需新增依赖）。新增：
 
-- `tests/api/prompts-allowlist.test.ts`：测试 POST/PUT 时附加未知字段会被剥离
-- `tests/api/prompts-put-no-owner-change.test.ts`：测试 PUT 不能修改 created_by
+- `tests/api/prompts-strict-schema.test.ts`：测试 POST/PUT 携带未知字段（`id`、`created_at`、自造字段名）会返回 400 而非被静默接受
+- `tests/api/prompts-put-no-owner-change.test.ts`：测试 PUT body 包含 `created_by` 时同样返回 400（strict schema 拦截）；即使绕过 schema，allowlist 兜底使数据库 `created_by` 列保持不变
 
 CI 中跑 `npm run test`（已在 `package.json` 中定义为 `vitest run`）。本 spec 落地时一并新增 GitHub Actions workflow（`.github/workflows/ci.yml`），在每次 PR 上跑 `npm run lint:logs` + `npm run test` + `tsc -b`。
 
