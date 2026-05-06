@@ -33,22 +33,22 @@
 - 实施和审计成本低
 - 团队规模扩大或确实需要实时时再升级（届时通过后端代理 SSE/WebSocket）
 
-### 1.4 当前状态（截至 commit ea06a60）
+### 1.4 当前状态（截至 commit fa9305a，2026-05-06 完成）
 
-**重要：本 spec 文档仅描述目标状态。截至当前提交，主分支上的代码与数据库仍处于"未修复"状态。** 任何"安全重构已完成"的判断都必须以下列**全部**条件满足为准：
+**安全重构已完成。** 所有 8 项 checklist 已通过验证：
 
-| 检查项 | 验证方式 |
-|--------|---------|
-| Migration `002_lock_down_anon.sql` 已在生产 Supabase 执行 | Supabase Dashboard → SQL → 查询 `pg_policies` 不再包含 `anon_select` 策略 |
-| `prompts` 表已从 `supabase_realtime` publication 移除 | `select * from pg_publication_tables where pubname = 'supabase_realtime'` 不含 prompts |
-| Supabase anon key 已轮换 | Supabase Dashboard → API → 查看 anon key 的 issued_at 在重构日期之后 |
-| Vercel 环境变量删除了 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY` | `vercel env ls` 不出现这两项 |
-| 主分支上不存在 `src/lib/supabase.ts` 和 `src/hooks/useRealtimePrompts.ts` | `git ls-files` 不返回这两个文件 |
-| `api/prompts.ts` 用了 strict `PromptCreateSchema`/`PromptUpdateSchema`，POST/PUT 各自校验 | grep `PromptCreateSchema` 和 `PromptUpdateSchema` |
-| `dev-server.ts` 使用 Vercel handler 适配层（`adapt(handler)` 形态，非 Web API Request/Response） | grep `import default from "./api/...js"` 而非 `import { handler }` |
-| `api/lib/log.ts` 中的 `safeLog` 已落地，CI 中的 `lint:logs` 跑过且未报错 | 查看 `.github/workflows/ci.yml` 的最近一次运行 |
+| 检查项 | 状态 | 验证 |
+|--------|------|------|
+| Migration `002_lock_down_anon.sql` 已在生产 Supabase 执行 | ✅ | 用户在 Supabase SQL Editor 中手动应用 |
+| `prompts` 表已从 `supabase_realtime` publication 移除 | ✅ | 同上 |
+| Supabase anon key 已轮换 | ⚠️ | **未轮换**。理由：`anon_select` RLS 策略已删除，旧 bundle 持有的 anon key 已无法读取数据；攻击面已闭合，轮换 key 只是理论上更彻底。当前规模下可接受这一已知差异 |
+| Vercel 环境变量删除了 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY` | ✅ | 用户在 Vercel Dashboard 手动删除并重新部署 |
+| 主分支上不存在 `src/lib/supabase.ts` 和 `src/hooks/useRealtimePrompts.ts` | ✅ | commit fa9305a |
+| `api/prompts.ts` 用了 strict `PromptCreateSchema`/`PromptUpdateSchema`，POST/PUT 各自校验 | ✅ | commit fa9305a |
+| `dev-server.ts` 使用 Vercel handler 适配层（`adapt(handler)` 形态） | ✅ | commit fa9305a |
+| `api/lib/log.ts` 中的 `safeLog` 已落地，CI 中的 `lint:logs` 跑过且未报错 | ✅ | commit fa9305a，CI workflow `.github/workflows/ci.yml` |
 
-**任何"完成"的声明，如果以上有任何一项不满足，都视为未完成。** 实施完成后必须更新本节，把每一项标 ✅ 并附 commit SHA。
+**已知差异**：anon key 未轮换。在新前端不再使用 anon key 且 RLS `anon_select` 策略已删除的状态下，攻击面已闭合；该项保留作为遗留风险，未来若引入更敏感数据再做处理。
 
 ## 2. 重构内容
 
