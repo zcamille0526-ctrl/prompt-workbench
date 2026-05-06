@@ -33,7 +33,7 @@
 - 实施和审计成本低
 - 团队规模扩大或确实需要实时时再升级（届时通过后端代理 SSE/WebSocket）
 
-### 1.4 当前状态（截至 commit 242ff92）
+### 1.4 当前状态（截至 commit ea06a60）
 
 **重要：本 spec 文档仅描述目标状态。截至当前提交，主分支上的代码与数据库仍处于"未修复"状态。** 任何"安全重构已完成"的判断都必须以下列**全部**条件满足为准：
 
@@ -44,8 +44,8 @@
 | Supabase anon key 已轮换 | Supabase Dashboard → API → 查看 anon key 的 issued_at 在重构日期之后 |
 | Vercel 环境变量删除了 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY` | `vercel env ls` 不出现这两项 |
 | 主分支上不存在 `src/lib/supabase.ts` 和 `src/hooks/useRealtimePrompts.ts` | `git ls-files` 不返回这两个文件 |
-| `api/prompts.ts` 用了 strict Zod schema 和 POST/PUT 分离的字段 allowlist | grep `.strict()` 和 `PUT_ALLOWED_FIELDS` |
-| `dev-server.ts` 使用 Vercel handler 适配层（非 Web API Request/Response） | grep `import default from "./api/...js"` 而非 `import { handler }` |
+| `api/prompts.ts` 用了 strict `PromptCreateSchema`/`PromptUpdateSchema`，POST/PUT 各自校验 | grep `PromptCreateSchema` 和 `PromptUpdateSchema` |
+| `dev-server.ts` 使用 Vercel handler 适配层（`adapt(handler)` 形态，非 Web API Request/Response） | grep `import default from "./api/...js"` 而非 `import { handler }` |
 | `api/lib/log.ts` 中的 `safeLog` 已落地，CI 中的 `lint:logs` 跑过且未报错 | 查看 `.github/workflows/ci.yml` 的最近一次运行 |
 
 **任何"完成"的声明，如果以上有任何一项不满足，都视为未完成。** 实施完成后必须更新本节，把每一项标 ✅ 并附 commit SHA。
@@ -150,23 +150,47 @@ export function usePromptsPolling(onTick: () => void) {
 
 修改 `api/prompts.ts`：
 
-- **POST/PUT** 必须用 Zod 校验整个 body。**统一使用 strict 模式**——schema 上调用 `.strict()`，未知字段直接返回 400 而不是被静默剥离：
+- **POST/PUT 使用不同的 Zod schema，都启用 strict 模式**。这样 PUT body 带 `created_by` 会被 schema 直接拒绝（400），而不是依赖后续的 allowlist 偷偷剥离——保证拒绝信号在最前线，所有"试图改 owner"的请求都能被客户端立即看到：
 
 ```ts
-// src/lib/schemas.ts 中已有的 PromptSchema 改为 strict
-export const PromptSchema = z.object({
+// src/lib/schemas.ts
+
+// 共享字段（POST/PUT 都允许修改的）
+const PromptCommonShape = {
   title: z.string().min(1),
   content: z.string().min(1),
   category: z.string().min(1),
   tags: z.array(z.string()),
   variables: z.array(VariableSchema),
+};
+
+// POST schema：含 created_by（新建时由当前用户名字填充）
+export const PromptCreateSchema = z.object({
+  ...PromptCommonShape,
   created_by: z.string().min(1),
-}).strict();  // 关键：未知字段会让 .safeParse 失败
+}).strict();
+
+// PUT schema：不含 created_by（owner 不可被改写）
+// strict 模式让 PUT 传 created_by/id/created_at/use_count/任意未知字段都返回 400
+export const PromptUpdateSchema = z.object(PromptCommonShape).strict();
+
+export type PromptCreateInput = z.infer<typeof PromptCreateSchema>;
+export type PromptUpdateInput = z.infer<typeof PromptUpdateSchema>;
 ```
 
 ```ts
 // api/prompts.ts 中的处理
-const parsed = PromptSchema.safeParse(req.body);
+// POST
+const parsed = PromptCreateSchema.safeParse(req.body);
+if (!parsed.success) {
+  return res.status(400).json({
+    error: "Invalid payload",
+    details: parsed.error.issues.map(i => `${i.path.join(".")}: ${i.message}`),
+  });
+}
+
+// PUT
+const parsed = PromptUpdateSchema.safeParse(req.body);
 if (!parsed.success) {
   return res.status(400).json({
     error: "Invalid payload",
@@ -177,13 +201,13 @@ if (!parsed.success) {
 
 **为什么 strict 而非静默剥离**：strict 让客户端能立即知道写错字段名；静默剥离会掩盖 bug，例如前端把 `is_private` 误写成 `private` 时，后端用静默剥离不会报错，但功能失效。
 
-**仍然保留字段 allowlist 作为防御纵深**——即使 Zod schema 将来被误改导致放过未知字段，allowlist 仍然兜底（POST 与 PUT 字段允许列表不同）：
+**仍然保留字段 allowlist 作为防御纵深**——即使将来 schema 被误改成非 strict 或漏掉某个字段，allowlist 仍然兜底（POST 与 PUT 字段允许列表不同）：
 
 ```ts
-// POST 允许字段（含 created_by，因为新建时由当前用户名字填充）
+// POST 允许字段（与 PromptCreateSchema 对齐）
 const POST_ALLOWED_FIELDS = ["title", "content", "category", "tags", "variables", "created_by"];
 
-// PUT 不允许覆盖 created_by（owner 一旦确立不可被改写，否则任何登录用户都能"夺取"私人/草稿 prompt 的所有权）
+// PUT 允许字段（与 PromptUpdateSchema 对齐，不含 created_by）
 const PUT_ALLOWED_FIELDS = ["title", "content", "category", "tags", "variables"];
 
 function pickFields(data: object, allowed: string[]) {
@@ -205,16 +229,25 @@ await supabase.from("prompts").update(updateData).eq("id", id);
 
 ### 2.5 工程改进
 
-新增 `api/tsconfig.json` 和 `tests/tsconfig.json`（或扩展根 `tsconfig.json` 的 `include`）：
+新增子 tsconfig，注意 `extends` 的相对路径必须指向**根**的 `tsconfig.json`，否则放在 `api/` 下的 `tsconfig.json` 会自引用：
 
+`api/tsconfig.json`：
 ```json
 {
-  "extends": "./tsconfig.json",
-  "include": ["api/**/*.ts", "tests/**/*.ts", "dev-server.ts"]
+  "extends": "../tsconfig.json",
+  "include": ["./**/*.ts"]
 }
 ```
 
-修改 root `tsconfig.json` 的 references 或单独跑 `tsc -p api/tsconfig.json`。在 CI/构建中加入此检查。
+`tests/tsconfig.json`：
+```json
+{
+  "extends": "../tsconfig.json",
+  "include": ["./**/*.ts", "../dev-server.ts"]
+}
+```
+
+或者直接在根 `tsconfig.json` 里通过 `references` 把 `api/`、`tests/`、`dev-server.ts` 纳入项目引用，由实施者择一即可。在 CI/构建中跑 `tsc -b api tests` 让这些目录也被类型检查。
 
 **测试框架**：项目已使用 Vitest（已经在 devDependencies 中）。所有新增测试文件都用 vitest，CI 中跑 `npm run test`（已在 package.json 中定义）。本 spec 落地后还需要在 GitHub Actions 中加一个最小 CI workflow，运行 `npm run lint:logs` 和 `npm run test`。
 
@@ -445,8 +478,8 @@ CI 中跑这个脚本，不通过则构建失败。规则可以演进，但要�
 
 测试框架沿用项目已有的 Vitest（无需新增依赖）。新增：
 
-- `tests/api/prompts-strict-schema.test.ts`：测试 POST/PUT 携带未知字段（`id`、`created_at`、自造字段名）会返回 400 而非被静默接受
-- `tests/api/prompts-put-no-owner-change.test.ts`：测试 PUT body 包含 `created_by` 时同样返回 400（strict schema 拦截）；即使绕过 schema，allowlist 兜底使数据库 `created_by` 列保持不变
+- `tests/api/prompts-strict-schema.test.ts`：测试 POST/PUT 携带未知字段（`id`、`created_at`、`use_count`、自造字段名）会返回 400 而非被静默接受
+- `tests/api/prompts-put-no-owner-change.test.ts`：测试 PUT body 包含 `created_by` 时返回 400（被 `PromptUpdateSchema` 的 strict 拦截）；并测试即使绕过 schema，`PUT_ALLOWED_FIELDS` 兜底使数据库 `created_by` 列保持不变
 
 CI 中跑 `npm run test`（已在 `package.json` 中定义为 `vitest run`）。本 spec 落地时一并新增 GitHub Actions workflow（`.github/workflows/ci.yml`），在每次 PR 上跑 `npm run lint:logs` + `npm run test` + `tsc -b`。
 
