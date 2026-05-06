@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "lint:logs": "if grep -rE 'console\\.(log|info|warn|error)\\(req\\.(body|headers|query)|console\\.(log|info|warn|error)\\([^)]*messages\\b' api/ src/lib/api.ts dev-server.ts; then echo 'Forbidden raw log of request data'; exit 1; fi",
+    "typecheck": "tsc -b tsconfig.app.json tsconfig.node.json api/tsconfig.json tests/tsconfig.json",
     "preview": "vite preview",
     "test": "vitest run"
   },

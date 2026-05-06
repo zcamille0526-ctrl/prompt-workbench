@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 import { useAuth } from "./hooks/useAuth";
 import { usePrompts } from "./hooks/usePrompts";
-import { useRealtimePrompts } from "./hooks/useRealtimePrompts";
+import { usePromptsPolling } from "./hooks/usePromptsPolling";
 import { PasswordGate } from "./components/PasswordGate";
 import { Layout } from "./components/Layout";
 import { Sidebar } from "./components/Sidebar";
@@ -9,7 +9,11 @@ import { PromptList } from "./components/PromptList";
 import { PromptDetail } from "./components/PromptDetail";
 import { PromptForm } from "./components/PromptForm";
 import { ConfirmDialog } from "./components/ConfirmDialog";
-import type { Prompt, PromptInput } from "./lib/schemas";
+import type {
+  Prompt,
+  PromptCreateInput,
+  PromptUpdateInput,
+} from "./lib/schemas";
 
 function AuthenticatedApp() {
   const {
@@ -21,7 +25,7 @@ function AuthenticatedApp() {
     deletePrompt,
   } = usePrompts();
 
-  useRealtimePrompts(fetchPrompts);
+  usePromptsPolling(fetchPrompts);
 
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -76,14 +80,15 @@ function AuthenticatedApp() {
     setFormOpen(true);
   };
 
-  const handleFormSubmit = async (data: PromptInput) => {
-    if (editingPrompt) {
-      const updated = await updatePrompt(editingPrompt.id, data);
-      setSelectedPrompt(updated);
-    } else {
-      const created = await createPrompt(data);
-      setSelectedPrompt(created);
-    }
+  const handleCreate = async (data: PromptCreateInput) => {
+    const created = await createPrompt(data);
+    setSelectedPrompt(created);
+  };
+
+  const handleUpdate = async (data: PromptUpdateInput) => {
+    if (!editingPrompt) return;
+    const updated = await updatePrompt(editingPrompt.id, data);
+    setSelectedPrompt(updated);
   };
 
   const handleDeleteConfirm = async () => {
@@ -148,7 +153,8 @@ function AuthenticatedApp() {
         key={editingPrompt?.id ?? "new"}
         open={formOpen}
         onOpenChange={setFormOpen}
-        onSubmit={handleFormSubmit}
+        onCreate={handleCreate}
+        onUpdate={handleUpdate}
         initial={editingPrompt}
       />
 

@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "../lib/api";
-import type { Prompt, PromptInput } from "../lib/schemas";
+import type {
+  Prompt,
+  PromptCreateInput,
+  PromptUpdateInput,
+} from "../lib/schemas";
 
 export function usePrompts() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
@@ -23,7 +27,7 @@ export function usePrompts() {
     fetchPrompts();
   }, [fetchPrompts]);
 
-  const createPrompt = useCallback(async (input: PromptInput) => {
+  const createPrompt = useCallback(async (input: PromptCreateInput) => {
     const data = await api.request<Prompt>("/api/prompts", {
       method: "POST",
       body: JSON.stringify(input),
@@ -32,19 +36,30 @@ export function usePrompts() {
     return data;
   }, []);
 
-  const updatePrompt = useCallback(async (id: string, input: PromptInput) => {
-    const data = await api.request<Prompt>(`/api/prompts?id=${id}`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    });
-    setPrompts((prev) => prev.map((p) => (p.id === id ? data : p)));
-    return data;
-  }, []);
+  const updatePrompt = useCallback(
+    async (id: string, input: PromptUpdateInput) => {
+      const data = await api.request<Prompt>(`/api/prompts?id=${id}`, {
+        method: "PUT",
+        body: JSON.stringify(input),
+      });
+      setPrompts((prev) => prev.map((p) => (p.id === id ? data : p)));
+      return data;
+    },
+    []
+  );
 
   const deletePrompt = useCallback(async (id: string) => {
     await api.request(`/api/prompts?id=${id}`, { method: "DELETE" });
     setPrompts((prev) => prev.filter((p) => p.id !== id));
   }, []);
 
-  return { prompts, isLoading, error, fetchPrompts, createPrompt, updatePrompt, deletePrompt };
+  return {
+    prompts,
+    isLoading,
+    error,
+    fetchPrompts,
+    createPrompt,
+    updatePrompt,
+    deletePrompt,
+  };
 }

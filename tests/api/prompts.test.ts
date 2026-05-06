@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 vi.stubEnv("SHARED_PASSWORD", "test-password-123");
 vi.stubEnv("SUPABASE_URL", "https://test.supabase.co");
@@ -9,53 +10,94 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: () => ({ from: mockFrom }),
 }));
 
-const { handler: verifyHandler } = await import("../../api/verify");
-const { handler } = await import("../../api/prompts");
+const verifyMod = await import("../../api/verify");
+const verifyHandler = verifyMod.default;
+const promptsMod = await import("../../api/prompts");
+const promptsHandler = promptsMod.default;
+
+type MockRes = {
+  status: ReturnType<typeof vi.fn>;
+  json: ReturnType<typeof vi.fn>;
+  statusCode: number;
+  body: unknown;
+};
+
+function makeRes(): MockRes {
+  const res: MockRes = {
+    statusCode: 0,
+    body: undefined,
+    status: vi.fn(),
+    json: vi.fn(),
+  };
+  res.status.mockImplementation((code: number) => {
+    res.statusCode = code;
+    return res;
+  });
+  res.json.mockImplementation((data: unknown) => {
+    res.body = data;
+    return res;
+  });
+  return res;
+}
+
+function makeReq(opts: {
+  method?: string;
+  body?: unknown;
+  query?: Record<string, string>;
+  authorization?: string;
+}): VercelRequest {
+  return {
+    method: opts.method ?? "GET",
+    body: opts.body,
+    query: opts.query ?? {},
+    headers: opts.authorization ? { authorization: opts.authorization } : {},
+  } as unknown as VercelRequest;
+}
 
 let token: string;
 
 beforeEach(async () => {
-  const req = new Request("http://localhost/api/verify", {
+  const verifyReq = makeReq({
     method: "POST",
-    body: JSON.stringify({ password: "test-password-123" }),
-    headers: { "content-type": "application/json" },
+    body: { password: "test-password-123" },
   });
-  const res = await verifyHandler(req);
-  const data = await res.json();
-  token = data.token;
+  const verifyRes = makeRes();
+  await verifyHandler(verifyReq, verifyRes as unknown as VercelResponse);
+  token = (verifyRes.body as { token: string }).token;
   mockFrom.mockReset();
 });
 
-describe("prompts handler", () => {
+describe("prompts handler — auth", () => {
   it("returns 401 without token", async () => {
-    const req = new Request("http://localhost/api/prompts", {
-      method: "GET",
-    });
-    const res = await handler(req);
-    expect(res.status).toBe(401);
+    const req = makeReq({ method: "GET" });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(401);
   });
 
   it("returns 401 with invalid token", async () => {
-    const req = new Request("http://localhost/api/prompts", {
+    const req = makeReq({
       method: "GET",
-      headers: { authorization: "Bearer invalid-token" },
+      authorization: "Bearer invalid-token",
     });
-    const res = await handler(req);
-    expect(res.status).toBe(401);
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(401);
   });
 
   it("calls supabase select on GET with valid token", async () => {
-    const mockSelect = vi.fn().mockReturnValue({
-      order: vi.fn().mockResolvedValue({ data: [], error: null }),
-    });
-    mockFrom.mockReturnValue({ select: mockSelect });
+    const orderMock = vi.fn().mockResolvedValue({ data: [], error: null });
+    const selectMock = vi.fn().mockReturnValue({ order: orderMock });
+    mockFrom.mockReturnValue({ select: selectMock });
 
-    const req = new Request("http://localhost/api/prompts", {
+    const req = makeReq({
       method: "GET",
-      headers: { authorization: `Bearer ${token}` },
+      authorization: `Bearer ${token}`,
     });
-    const res = await handler(req);
-    expect(res.status).toBe(200);
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+
+    expect(res.statusCode).toBe(200);
     expect(mockFrom).toHaveBeenCalledWith("prompts");
   });
 });

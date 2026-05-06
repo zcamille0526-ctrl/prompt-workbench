@@ -1,17 +1,30 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CATEGORIES } from "../lib/constants";
-import { PromptSchema } from "../lib/schemas";
-import type { Prompt, PromptInput, Variable } from "../lib/schemas";
+import { PromptCreateSchema, PromptUpdateSchema } from "../lib/schemas";
+import type {
+  Prompt,
+  PromptCreateInput,
+  PromptUpdateInput,
+  Variable,
+} from "../lib/schemas";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (data: PromptInput) => Promise<void>;
+  onCreate: (data: PromptCreateInput) => Promise<void>;
+  onUpdate: (data: PromptUpdateInput) => Promise<void>;
   initial?: Prompt;
 }
 
-export function PromptForm({ open, onOpenChange, onSubmit, initial }: Props) {
+export function PromptForm({
+  open,
+  onOpenChange,
+  onCreate,
+  onUpdate,
+  initial,
+}: Props) {
+  const isEdit = initial !== undefined;
   const [title, setTitle] = useState(initial?.title || "");
   const [content, setContent] = useState(initial?.content || "");
   const [category, setCategory] = useState(initial?.category || "");
@@ -44,24 +57,40 @@ export function PromptForm({ open, onOpenChange, onSubmit, initial }: Props) {
       .map((t) => t.trim())
       .filter(Boolean);
 
-    const data = {
-      title,
-      content,
-      category,
-      tags,
-      variables: variables.filter((v) => v.name.trim()),
-      created_by: createdBy,
-    };
-
-    const parsed = PromptSchema.safeParse(data);
-    if (!parsed.success) {
-      setError(parsed.error.issues[0].message);
-      return;
-    }
+    const cleanedVariables = variables.filter((v) => v.name.trim());
 
     setIsSubmitting(true);
     try {
-      await onSubmit(parsed.data);
+      if (isEdit) {
+        const parsed = PromptUpdateSchema.safeParse({
+          title,
+          content,
+          category,
+          tags,
+          variables: cleanedVariables,
+        });
+        if (!parsed.success) {
+          setError(parsed.error.issues[0].message);
+          setIsSubmitting(false);
+          return;
+        }
+        await onUpdate(parsed.data);
+      } else {
+        const parsed = PromptCreateSchema.safeParse({
+          title,
+          content,
+          category,
+          tags,
+          variables: cleanedVariables,
+          created_by: createdBy,
+        });
+        if (!parsed.success) {
+          setError(parsed.error.issues[0].message);
+          setIsSubmitting(false);
+          return;
+        }
+        await onCreate(parsed.data);
+      }
       onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存失败");
@@ -165,15 +194,17 @@ export function PromptForm({ open, onOpenChange, onSubmit, initial }: Props) {
               ))}
             </div>
 
-            <div>
-              <label className="text-sm font-medium text-text-primary">创建人</label>
-              <input
-                type="text"
-                value={createdBy}
-                onChange={(e) => setCreatedBy(e.target.value)}
-                className="input-field mt-1"
-              />
-            </div>
+            {!isEdit && (
+              <div>
+                <label className="text-sm font-medium text-text-primary">创建人</label>
+                <input
+                  type="text"
+                  value={createdBy}
+                  onChange={(e) => setCreatedBy(e.target.value)}
+                  className="input-field mt-1"
+                />
+              </div>
+            )}
 
             {error && <p className="text-error text-sm">{error}</p>}
 
