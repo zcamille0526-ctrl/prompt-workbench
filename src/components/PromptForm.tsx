@@ -2,6 +2,7 @@ import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CATEGORIES } from "../lib/constants";
 import { PromptCreateSchema, PromptUpdateSchema } from "../lib/schemas";
+import { PROMPT_TEMPLATE } from "../lib/templates";
 import type {
   Prompt,
   PromptCreateInput,
@@ -145,14 +146,31 @@ export function PromptForm({
             </div>
 
             <div>
-              <label className="text-sm font-medium text-text-primary">
-                内容（支持 Markdown，用 {"{{变量名}}"} 定义变量）
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-sm font-medium text-text-primary">
+                  内容（支持 Markdown，用 {"{{变量名}}"} 定义变量）
+                </label>
+                {!isEdit && (
+                  <button
+                    type="button"
+                    onClick={() => setContent(PROMPT_TEMPLATE)}
+                    disabled={content.trim() !== ""}
+                    className="text-xs font-medium text-secondary hover:text-orange-300 disabled:text-gray-400 disabled:cursor-not-allowed"
+                    title={
+                      content.trim() !== ""
+                        ? "内容不为空时无法插入模板，避免覆盖已有内容"
+                        : "插入「角色 + 任务 + 输出格式 + 约束 + 示例」骨架"
+                    }
+                  >
+                    📋 使用模板
+                  </button>
+                )}
+              </div>
               <textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 rows={12}
-                className="input-field mt-1 font-mono"
+                className="input-field font-mono"
               />
             </div>
 
