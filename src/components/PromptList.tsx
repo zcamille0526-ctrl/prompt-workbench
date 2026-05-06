@@ -71,10 +71,17 @@ export function PromptList({ prompts, selectedId, onSelect, onTagClick }: Props)
                 ))}
               </div>
             )}
-            <div className="text-xs text-text-primary mt-1.5 truncate">
-              {prompt.content.length > 60
-                ? `${prompt.content.slice(0, 60)}...`
-                : prompt.content}
+            <div className="flex items-end justify-between gap-2 mt-1.5">
+              <div className="text-xs text-text-primary truncate flex-1 min-w-0">
+                {prompt.content.length > 60
+                  ? `${prompt.content.slice(0, 60)}...`
+                  : prompt.content}
+              </div>
+              {prompt.use_count > 0 && (
+                <span className="text-xs text-text-primary/60 shrink-0 flex items-center gap-0.5">
+                  ↻ {prompt.use_count}
+                </span>
+              )}
             </div>
           </div>
         </button>

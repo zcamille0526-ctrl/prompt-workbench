@@ -56,4 +56,5 @@ export interface Prompt {
   created_by: string;
   created_at: string;
   updated_at: string;
+  use_count: number;
 }

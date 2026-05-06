@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Prompt } from "../lib/schemas";
 import { extractVariables, substituteVariables } from "../lib/variables";
+import { api } from "../lib/api";
 
 interface Props {
   prompt: Prompt;
@@ -22,6 +23,9 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
     return init;
   });
   const [copied, setCopied] = useState(false);
+  // optimistic local count: bumped on copy, reset to server value when the
+  // selected prompt changes (parent passes a new prompt object via key prop)
+  const [localCount, setLocalCount] = useState(prompt.use_count);
 
   const finalContent = useMemo(
     () => substituteVariables(prompt.content, values),
@@ -43,6 +47,8 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
+    setLocalCount((c) => c + 1);
+    void api.incrementUseCount(prompt.id);
   };
 
   return (
@@ -124,6 +130,7 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
       <div className="mt-4 text-xs text-text-primary">
         创建人：{prompt.created_by} · 更新于{" "}
         {new Date(prompt.updated_at).toLocaleDateString("zh-CN")}
+        {localCount > 0 && ` · 使用 ${localCount} 次`}
       </div>
     </div>
   );

@@ -60,6 +60,24 @@ class ApiClient {
 
     return res.json();
   }
+
+  /**
+   * Fire-and-forget increment of a prompt's use_count.
+   *
+   * Failures are intentionally swallowed: the copy flow must never break
+   * because a counter request hiccupped. The next polling tick will pull
+   * authoritative values from the server.
+   */
+  async incrementUseCount(id: string): Promise<void> {
+    try {
+      await this.request("/api/use-count", {
+        method: "POST",
+        body: JSON.stringify({ id }),
+      });
+    } catch {
+      // intentionally silent
+    }
+  }
 }
 
 export const api = new ApiClient();

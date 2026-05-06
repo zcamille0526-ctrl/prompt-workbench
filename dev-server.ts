@@ -3,6 +3,7 @@ import type { Request as ExpressRequest, Response as ExpressResponse } from "exp
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import verifyHandler from "./api/verify.js";
 import promptsHandler from "./api/prompts.js";
+import useCountHandler from "./api/use-count.js";
 
 const app = express();
 const PORT = 3001;
@@ -27,6 +28,7 @@ const adapt =
 
 app.post("/api/verify", adapt(verifyHandler));
 app.all("/api/prompts", adapt(promptsHandler));
+app.post("/api/use-count", adapt(useCountHandler));
 
 app.listen(PORT, () => {
   console.log(`API server running at http://localhost:${PORT}`);
