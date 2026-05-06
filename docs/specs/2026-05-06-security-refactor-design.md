@@ -35,20 +35,25 @@
 
 ## 2. 重构内容
 
-### 2.1 删除公开 SELECT 策略
+### 2.1 删除公开 SELECT 策略并切断 Realtime 发布
 
-新增 SQL 迁移 `005_lock_down_anon.sql`：
+新增 SQL 迁移 `002_lock_down_anon.sql`（编号 002，因为 001 是建表，002-004 留给后续 feature spec 时按本 spec 实施完成后的实际顺序排）：
 
 ```sql
 -- 删除 prompts 表的公开 SELECT 策略
 drop policy if exists "anon_select" on prompts;
 
--- 如果将来 examples 表已上线，也要删除（依赖关系：本 spec 必须在
--- save-example spec 之前完成；若 save-example 已上线则一并删除）
-drop policy if exists "anon_select_examples" on examples;
+-- 防御性：把 prompts 从 Realtime 发布中移除，即使将来误开 RLS 也不会走 websocket 泄露
+alter publication supabase_realtime drop table prompts;
+
+-- 注意：此时 examples 表还不存在（save-example spec 在本 spec 之后实施），
+-- 因此本迁移不处理 examples。save-example spec 实施时其建表 SQL 中
+-- 必须从一开始就不包含 anon_select_examples 策略，且不加入 supabase_realtime
 ```
 
-数据库回到"只有 service-role 能读写"的状态。
+**部署后必须立即在 Supabase Dashboard 中轮换 anon key**：删除环境变量并重新构建只防止"新打包的 bundle 携带 key"，但旧 bundle 缓存、CDN 缓存里的 key 仍然有效且 Supabase 仍会接受。轮换 key 是闭合此漏洞的唯一手段。
+
+数据库回到"只有 service-role 能读写、Realtime 不发布 prompts 表"的状态。
 
 ### 2.2 移除前端 Supabase 客户端
 
@@ -78,23 +83,34 @@ export function usePromptsPolling(onTick: () => void) {
   callbackRef.current = onTick;
 
   useEffect(() => {
-    const id = setInterval(() => {
-      // 仅在页面可见时轮询，避免后台标签页持续请求
-      if (document.visibilityState === "visible") {
-        callbackRef.current();
-      }
-    }, POLL_INTERVAL_MS);
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let lastFetchAt = 0;
 
-    // 标签页从隐藏切回可见时立即拉一次
-    const onVisible = () => {
-      if (document.visibilityState === "visible") {
-        callbackRef.current();
-      }
+    const tick = () => {
+      // 仅在页面可见时拉取
+      if (document.visibilityState !== "visible") return;
+      lastFetchAt = Date.now();
+      callbackRef.current();
     };
+
+    const startInterval = () => {
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(tick, POLL_INTERVAL_MS);
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      // 切回可见时立即拉一次，但避免与刚刚的轮询拉取重叠（< 5s 内不重复）
+      if (Date.now() - lastFetchAt > 5_000) tick();
+      // 重置定时器，确保下一次轮询从可见时刻起算 30s
+      startInterval();
+    };
+
+    startInterval();
     document.addEventListener("visibilitychange", onVisible);
 
     return () => {
-      clearInterval(id);
+      if (intervalId) clearInterval(intervalId);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
@@ -106,17 +122,31 @@ export function usePromptsPolling(onTick: () => void) {
 修改 `api/prompts.ts`：
 
 - **POST/PUT** 必须用 `PromptSchema.safeParse()` 校验整个 body
-- **写入数据库时只 pick 白名单字段**，避免恶意 payload 注入额外字段：
+- **写入数据库时只 pick 白名单字段**，且 **POST 与 PUT 用不同的白名单**：
 
 ```ts
-const ALLOWED_FIELDS = ["title", "content", "category", "tags", "variables", "created_by"];
-const insertData = Object.fromEntries(
-  Object.entries(parsed.data).filter(([k]) => ALLOWED_FIELDS.includes(k))
-);
+// POST 允许字段（含 created_by，因为新建时由当前用户名字填充）
+const POST_ALLOWED_FIELDS = ["title", "content", "category", "tags", "variables", "created_by"];
+
+// PUT 不允许覆盖 created_by（owner 一旦确立不可被改写，否则任何登录用户都能"夺取"私人/草稿 prompt 的所有权）
+const PUT_ALLOWED_FIELDS = ["title", "content", "category", "tags", "variables"];
+
+function pickFields(data: object, allowed: string[]) {
+  return Object.fromEntries(
+    Object.entries(data).filter(([k]) => allowed.includes(k))
+  );
+}
+
+// POST
+const insertData = pickFields(parsed.data, POST_ALLOWED_FIELDS);
 await supabase.from("prompts").insert(insertData);
+
+// PUT
+const updateData = pickFields(parsed.data, PUT_ALLOWED_FIELDS);
+await supabase.from("prompts").update(updateData).eq("id", id);
 ```
 
-**后续每个新 API 端点**（use-count、chat、examples）都遵循同样模式：先 Zod 校验、再字段 allowlist、再写入数据库。
+**后续每个新 API 端点**（use-count、chat、examples）都遵循同样模式：先 Zod 校验、再字段 allowlist、再写入数据库。每个端点必须显式区分 POST/PUT 允许的字段。
 
 ### 2.5 工程改进
 
@@ -130,6 +160,10 @@ await supabase.from("prompts").insert(insertData);
 ```
 
 修改 root `tsconfig.json` 的 references 或单独跑 `tsc -p api/tsconfig.json`。在 CI/构建中加入此检查。
+
+**测试框架**：项目已使用 Vitest（已经在 devDependencies 中）。所有新增测试文件都用 vitest，CI 中跑 `npm run test`（已在 package.json 中定义）。本 spec 落地后还需要在 GitHub Actions 中加一个最小 CI workflow，运行 `npm run lint:logs` 和 `npm run test`。
+
+**审计 `dev-server.ts`**：实施前必须确认 `dev-server.ts` 只引用 `SUPABASE_SERVICE_ROLE_KEY`，绝不引用 `SUPABASE_ANON_KEY` 或 `VITE_SUPABASE_*`。grep 一遍即可。
 
 ### 2.6 统一 API handler 风格
 
@@ -153,15 +187,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 - 现有 14 条提示词数据不需要迁移
 - UI 体验对最终用户基本无感（除了同事改 prompt 后等最多 30 秒才看到）
 
-## 4. 数据迁移
+## 4. 部署顺序（必须严格按顺序）
 
-新增 `supabase/migrations/005_lock_down_anon.sql`，需要在 Supabase SQL Editor 中手动执行。
+错误的顺序会导致用户会话短时间内看到空数据或报错。正确顺序：
 
-Vercel 环境变量需要手动删除两项：
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
+1. **deploy 新前端**（已删除 `src/lib/supabase.ts`、`useRealtimePrompts`，改为 `usePromptsPolling`）—— 此时新前端还能用旧 anon 策略读数据，无中断
+2. **应用 SQL 迁移** `002_lock_down_anon.sql` —— 老 bundle 缓存的会话此刻读会失败，但只影响活跃中的旧标签页（用户刷新即可拉到新 bundle）
+3. **删除 Vercel 环境变量** `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`，重新部署一次 —— 让新 bundle 不再携带这两个字符串
+4. **在 Supabase Dashboard 中轮换 anon key** —— 关闭旧 key，使所有缓存中的旧 bundle 都无法再用（这一步是真正闭合漏洞的关键）
+5. **更新 `.env.example`** 删除两项（如未在步骤 3 中一起改）
 
-删除环境变量后需要重新部署一次让前端 bundle 不再包含这两个字符串。
+迁移文件 `supabase/migrations/002_lock_down_anon.sql` 需要在 Supabase SQL Editor 中手动执行。
 
 ## 5. 错误场景
 
@@ -195,26 +231,29 @@ Vercel 环境变量需要手动删除两项：
 
 ## 8. LLM 试运行的安全补充
 
-`2026-05-06-llm-test-run-design.md` 需要补三件事：
+`2026-05-06-llm-test-run-design.md` 需要补四件事：
 
-### 8.1 Payload 大小限制
+### 8.1 Payload 大小限制（在解析前阻断）
 
-后端 `api/chat.ts` 进入业务前先校验：
+后端 `api/chat.ts` 通过 Vercel route config 设定 body 上限，让请求在 body parse 前就被拒绝：
 
 ```ts
-const MAX_PAYLOAD_BYTES = 100 * 1024; // 100KB
-const bodySize = Buffer.byteLength(JSON.stringify(req.body));
-if (bodySize > MAX_PAYLOAD_BYTES) {
-  return res.status(413).json({ error: "Payload too large (max 100KB)" });
-}
+// api/chat.ts 顶部
+export const config = {
+  api: {
+    bodyParser: { sizeLimit: "100kb" },
+  },
+};
 ```
+
+超过自动返回 413（Payload Too Large），无需手动判断。如需在业务层补充检查（比如统计 messages 累计字符数），再单独做一次轻量校验。
 
 ### 8.2 简单请求频控
 
 第一版用最朴素的内存计数（serverless 实例间不共享，但够用作粗粒度防滥用）：
 
 ```ts
-// 同一 token 每分钟最多 30 次
+// 同一 token 每分钟最多 30 次（每实例独立计数；Vercel 自动扩容时实际上限 = 30 × 实例数）
 const recent = new Map<string, number[]>(); // token -> timestamps[]
 function rateLimit(token: string): boolean {
   const now = Date.now();
@@ -228,16 +267,64 @@ function rateLimit(token: string): boolean {
 }
 ```
 
-超限返回 429。
+超限返回 429。**已知局限**：Vercel autoscaling 时每个实例独立计数，实际上限 = 30 × 实例数。10 人团队 + Hobby 计划下实例通常不超过 2-3 个，可接受。下一节的全局预算上限作为最终兜底。
 
-### 8.3 日志脱敏
+### 8.3 全局每日预算上限（成本兜底）
 
-后端**不允许**将以下内容写入 Vercel 日志或任何持久化存储：
-- 用户 API Key
-- 完整 messages 内容
-- prompt content
+为防止 token 泄露 → 跑空账户余额，新增 Supabase 全局每日计数器：
 
-允许记录：HTTP 状态码、模型名、token usage、错误码（不带 message body）。这点写入团队约定，代码中通过 ESLint 规则或 code review 把关。
+```sql
+-- 003_create_chat_budget.sql（在 chat 功能上线时同时执行）
+create table chat_budget (
+  date date primary key,
+  call_count integer not null default 0
+);
+```
+
+后端 `api/chat.ts` 在每次调用前先 select + update：
+
+```ts
+const today = new Date().toISOString().slice(0, 10);
+const DAILY_LIMIT = 500; // 全平台每日 500 次调用，10 人团队足够，超出则拒绝
+const { data: row } = await supabase.from("chat_budget").select("call_count").eq("date", today).single();
+const count = row?.call_count ?? 0;
+if (count >= DAILY_LIMIT) {
+  return res.status(429).json({ error: "Daily call limit reached" });
+}
+await supabase.from("chat_budget").upsert({ date: today, call_count: count + 1 });
+```
+
+最坏情况：DeepSeek V4-Pro 每次调用按 ~5K token 估算 ¥0.1，500 次/日 ≈ ¥50/日，月度封顶 ¥1500。这是"灾难情况"上限，正常使用远低于此。可在运营中根据实际用量调整。
+
+### 8.4 日志脱敏（具体可执行的机制）
+
+新增 `api/lib/log.ts`：
+
+```ts
+type LogContext = {
+  endpoint: string;
+  status: number;
+  model?: string;
+  tokenUsage?: { prompt_tokens: number; completion_tokens: number };
+  errorCode?: string;
+  // 注意：不接受 messages、apiKey、prompt content 等字段
+};
+
+export function safeLog(ctx: LogContext) {
+  console.log(JSON.stringify(ctx));
+}
+```
+
+约定所有 `api/*.ts` 必须用 `safeLog()` 写日志，不允许 `console.log(req.body)` 或类似裸打印。
+
+CI 中加入 grep 规则禁止以下模式：
+
+```bash
+# package.json scripts.lint:logs
+"lint:logs": "! grep -rE 'console\\.(log|info|warn|error)\\(req\\.|console\\.(log|info|warn|error)\\([^)]*messages' api/ src/lib/api.ts dev-server.ts"
+```
+
+CI 中跑这个脚本，不通过则构建失败。规则可以演进，但要有一个具体可执行的把关点。
 
 ## 9. 测试
 
@@ -252,7 +339,12 @@ function rateLimit(token: string): boolean {
 
 ### 9.2 自动化测试
 
-新增 `tests/api/prompts-allowlist.test.ts`：测试 POST/PUT 时附加未知字段会被剥离。
+测试框架沿用项目已有的 Vitest（无需新增依赖）。新增：
+
+- `tests/api/prompts-allowlist.test.ts`：测试 POST/PUT 时附加未知字段会被剥离
+- `tests/api/prompts-put-no-owner-change.test.ts`：测试 PUT 不能修改 created_by
+
+CI 中跑 `npm run test`（已在 `package.json` 中定义为 `vitest run`）。本 spec 落地时一并新增 GitHub Actions workflow（`.github/workflows/ci.yml`），在每次 PR 上跑 `npm run lint:logs` + `npm run test` + `tsc -b`。
 
 ## 10. 工作量估算
 

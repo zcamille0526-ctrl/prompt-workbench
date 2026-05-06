@@ -59,9 +59,8 @@ create policy "service_role_all_examples" on examples
   using (auth.role() = 'service_role')
   with check (auth.role() = 'service_role');
 
-create policy "anon_select_examples" on examples
-  for select
-  using (true);
+-- 不创建 anon SELECT 策略（依据 security-refactor spec：所有读取走后端代理）
+-- 不加入 supabase_realtime 发布（前端用 30s 轮询同步）
 ```
 
 ### 4.2 messages 字段格式
