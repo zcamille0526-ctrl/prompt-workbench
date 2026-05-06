@@ -33,6 +33,23 @@
 - 实施和审计成本低
 - 团队规模扩大或确实需要实时时再升级（届时通过后端代理 SSE/WebSocket）
 
+### 1.4 当前状态（截至 commit 242ff92）
+
+**重要：本 spec 文档仅描述目标状态。截至当前提交，主分支上的代码与数据库仍处于"未修复"状态。** 任何"安全重构已完成"的判断都必须以下列**全部**条件满足为准：
+
+| 检查项 | 验证方式 |
+|--------|---------|
+| Migration `002_lock_down_anon.sql` 已在生产 Supabase 执行 | Supabase Dashboard → SQL → 查询 `pg_policies` 不再包含 `anon_select` 策略 |
+| `prompts` 表已从 `supabase_realtime` publication 移除 | `select * from pg_publication_tables where pubname = 'supabase_realtime'` 不含 prompts |
+| Supabase anon key 已轮换 | Supabase Dashboard → API → 查看 anon key 的 issued_at 在重构日期之后 |
+| Vercel 环境变量删除了 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY` | `vercel env ls` 不出现这两项 |
+| 主分支上不存在 `src/lib/supabase.ts` 和 `src/hooks/useRealtimePrompts.ts` | `git ls-files` 不返回这两个文件 |
+| `api/prompts.ts` 用了 strict Zod schema 和 POST/PUT 分离的字段 allowlist | grep `.strict()` 和 `PUT_ALLOWED_FIELDS` |
+| `dev-server.ts` 使用 Vercel handler 适配层（非 Web API Request/Response） | grep `import default from "./api/...js"` 而非 `import { handler }` |
+| `api/lib/log.ts` 中的 `safeLog` 已落地，CI 中的 `lint:logs` 跑过且未报错 | 查看 `.github/workflows/ci.yml` 的最近一次运行 |
+
+**任何"完成"的声明，如果以上有任何一项不满足，都视为未完成。** 实施完成后必须更新本节，把每一项标 ✅ 并附 commit SHA。
+
 ## 2. 重构内容
 
 ### 2.1 删除公开 SELECT 策略并切断 Realtime 发布
@@ -43,8 +60,20 @@
 -- 删除 prompts 表的公开 SELECT 策略
 drop policy if exists "anon_select" on prompts;
 
--- 防御性：把 prompts 从 Realtime 发布中移除，即使将来误开 RLS 也不会走 websocket 泄露
-alter publication supabase_realtime drop table prompts;
+-- 防御性：把 prompts 从 Realtime 发布中移除（幂等）。
+-- 如果 prompts 不在 publication 中（例如已被移除或自定义 publication），直接 alter 会报错。
+do $$
+begin
+  if exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'prompts'
+  ) then
+    alter publication supabase_realtime drop table prompts;
+  end if;
+end $$;
 
 -- 注意：此时 examples 表还不存在（save-example spec 在本 spec 之后实施），
 -- 因此本迁移不处理 examples。save-example spec 实施时其建表 SQL 中
@@ -121,8 +150,34 @@ export function usePromptsPolling(onTick: () => void) {
 
 修改 `api/prompts.ts`：
 
-- **POST/PUT** 必须用 `PromptSchema.safeParse()` 校验整个 body
-- **写入数据库时只 pick 白名单字段**，且 **POST 与 PUT 用不同的白名单**：
+- **POST/PUT** 必须用 Zod 校验整个 body。**统一使用 strict 模式**——schema 上调用 `.strict()`，未知字段直接返回 400 而不是被静默剥离：
+
+```ts
+// src/lib/schemas.ts 中已有的 PromptSchema 改为 strict
+export const PromptSchema = z.object({
+  title: z.string().min(1),
+  content: z.string().min(1),
+  category: z.string().min(1),
+  tags: z.array(z.string()),
+  variables: z.array(VariableSchema),
+  created_by: z.string().min(1),
+}).strict();  // 关键：未知字段会让 .safeParse 失败
+```
+
+```ts
+// api/prompts.ts 中的处理
+const parsed = PromptSchema.safeParse(req.body);
+if (!parsed.success) {
+  return res.status(400).json({
+    error: "Invalid payload",
+    details: parsed.error.issues.map(i => `${i.path.join(".")}: ${i.message}`),
+  });
+}
+```
+
+**为什么 strict 而非静默剥离**：strict 让客户端能立即知道写错字段名；静默剥离会掩盖 bug，例如前端把 `is_private` 误写成 `private` 时，后端用静默剥离不会报错，但功能失效。
+
+**仍然保留字段 allowlist 作为防御纵深**——即使 Zod schema 将来被误改导致放过未知字段，allowlist 仍然兜底（POST 与 PUT 字段允许列表不同）：
 
 ```ts
 // POST 允许字段（含 created_by，因为新建时由当前用户名字填充）
@@ -146,7 +201,7 @@ const updateData = pickFields(parsed.data, PUT_ALLOWED_FIELDS);
 await supabase.from("prompts").update(updateData).eq("id", id);
 ```
 
-**后续每个新 API 端点**（use-count、chat、examples）都遵循同样模式：先 Zod 校验、再字段 allowlist、再写入数据库。每个端点必须显式区分 POST/PUT 允许的字段。
+**后续每个新 API 端点**（use-count、chat、examples）都遵循同样模式：先 strict Zod 校验、再字段 allowlist、再写入数据库。每个端点必须显式区分 POST/PUT 允许的字段。
 
 ### 2.5 工程改进
 
@@ -165,9 +220,11 @@ await supabase.from("prompts").update(updateData).eq("id", id);
 
 **审计 `dev-server.ts`**：实施前必须确认 `dev-server.ts` 只引用 `SUPABASE_SERVICE_ROLE_KEY`，绝不引用 `SUPABASE_ANON_KEY` 或 `VITE_SUPABASE_*`。grep 一遍即可。
 
-### 2.6 统一 API handler 风格
+### 2.6 统一 API handler 风格 + 修复 dev-server
 
-约定所有 `api/*.ts` 用 Vercel Node.js runtime 的 `(req: VercelRequest, res: VercelResponse)` 形态：
+**当前状态**：`api/verify.ts` 和 `api/prompts.ts` 已经迁移为 Vercel Node.js runtime 的 `(req: VercelRequest, res: VercelResponse)` + `default export`。但 `dev-server.ts` 仍然 `import { handler as ... }`（命名导入），并把 handler 当作 Web API 的 `(req: Request) => Promise<Response>` 调用。**这两边形态不一致，dev-server 当前已无法正常工作**——本节必须修。
+
+**统一方案**：所有 `api/*.ts` 用 Vercel Node.js 形态：
 
 ```ts
 import type { VercelRequest, VercelResponse } from "@vercel/node";
@@ -179,7 +236,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 }
 ```
 
-不再混用 Web API `Request/Response` 和 Vercel 类型。`dev-server.ts` 中的 Express 适配层已经按此 dispatch，保持不变。
+**修改 `dev-server.ts`**：让它通过适配层把 Express 的 `req/res` 直接转交给 Vercel handler。Vercel handler 期望的 `req`/`res` 与 Express 的 `req`/`res` 大部分字段兼容（`method`、`headers`、`body`、`query`、`status()`、`json()`），可以直接转：
+
+```ts
+import express from "express";
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import verifyHandler from "./api/verify.js";
+import promptsHandler from "./api/prompts.js";
+
+const app = express();
+const PORT = 3001;
+
+app.use(express.json({ limit: "100kb" })); // 与生产端 bodyParser.sizeLimit 对齐
+
+const adapt = (handler: (req: VercelRequest, res: VercelResponse) => Promise<void> | void) =>
+  async (req: express.Request, res: express.Response) => {
+    await handler(req as unknown as VercelRequest, res as unknown as VercelResponse);
+  };
+
+app.post("/api/verify", adapt(verifyHandler));
+app.all("/api/prompts", adapt(promptsHandler));
+
+app.listen(PORT, () => {
+  console.log(`API server running at http://localhost:${PORT}`);
+});
+```
+
+后续每加一个新 API 端点（chat、use-count、examples），都用 `adapt(handler)` 注册到 dev-server，无需在 dev-server 里写业务逻辑。
 
 ## 3. 不影响的部分
 
@@ -279,20 +362,41 @@ create table chat_budget (
   date date primary key,
   call_count integer not null default 0
 );
+
+-- 原子 increment 函数。返回 increment 后的最新 count 值
+-- 用单条 UPSERT + RETURNING 保证并发安全：多实例同时 +1 不会丢更新
+create or replace function increment_chat_budget(p_date date)
+returns integer
+language sql
+as $$
+  insert into chat_budget(date, call_count)
+  values (p_date, 1)
+  on conflict (date) do update set call_count = chat_budget.call_count + 1
+  returning call_count;
+$$;
 ```
 
-后端 `api/chat.ts` 在每次调用前先 select + update：
+后端 `api/chat.ts` 用 RPC 调用，避免 select/update 之间的竞态：
 
 ```ts
 const today = new Date().toISOString().slice(0, 10);
 const DAILY_LIMIT = 500; // 全平台每日 500 次调用，10 人团队足够，超出则拒绝
-const { data: row } = await supabase.from("chat_budget").select("call_count").eq("date", today).single();
-const count = row?.call_count ?? 0;
-if (count >= DAILY_LIMIT) {
+
+const { data: newCount, error } = await supabase.rpc("increment_chat_budget", { p_date: today });
+if (error) {
+  return res.status(500).json({ error: "Budget check failed" });
+}
+if (newCount > DAILY_LIMIT) {
+  // 已经 +1 了，记一笔但拒绝调用。下一次请求继续被拒，直到次日 0 点 date 切换。
+  // 为什么不在前置检查：UPSERT...RETURNING 是单语句原子的，把"+1 + 检查"合并成一次往返。
   return res.status(429).json({ error: "Daily call limit reached" });
 }
-await supabase.from("chat_budget").upsert({ date: today, call_count: count + 1 });
 ```
+
+**为什么用 RPC 而非 select + upsert**：
+- 两步操作存在 race：A 实例 select 看到 499，B 实例 select 看到 499，两边都通过检查、各 +1，结果 501（超额）
+- RPC 内部是单条 SQL 语句，Postgres 保证原子性，无论多少实例并发都不会丢更新
+- 代价：超限的请求也消耗了一次 budget 计数（已 +1），但这是对预算的"悲观"消费，更安全
 
 最坏情况：DeepSeek V4-Pro 每次调用按 ~5K token 估算 ¥0.1，500 次/日 ≈ ¥50/日，月度封顶 ¥1500。这是"灾难情况"上限，正常使用远低于此。可在运营中根据实际用量调整。
 
