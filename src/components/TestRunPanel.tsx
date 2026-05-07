@@ -124,10 +124,10 @@ export function TestRunPanel({
       <button
         type="button"
         onClick={handleOpenToggle}
-        className="btn-secondary"
+        className="btn-pill bg-secondary text-primary border border-secondary hover:bg-orange-200 focus-visible:ring-secondary/50 font-medium"
         title="用当前提示词与 DeepSeek 多轮对话"
       >
-        {open ? "收起试运行 ▴" : "试运行 ▾"}
+        {open ? "收起试运行 ▴" : "🧪 试运行 ▾"}
       </button>
 
       {open && (

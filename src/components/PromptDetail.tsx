@@ -133,9 +133,9 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
       </div>
 
       {variables.length > 0 && (
-        <div className="glass-surface rounded-xl p-4 mb-4">
+        <div className="glass-surface rounded-xl p-4 mb-4 max-w-xl">
           <h3 className="text-sm font-medium text-primary mb-2">变量填写</h3>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {variables.map((name) => (
               <div key={name}>
                 <label className="text-xs text-text-primary">{name}</label>
