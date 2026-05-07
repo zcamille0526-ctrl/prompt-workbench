@@ -133,19 +133,19 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
       </div>
 
       {variables.length > 0 && (
-        <div className="glass-surface rounded-xl p-4 mb-4 max-w-xl">
+        <div className="glass-surface rounded-xl p-4 mb-4 max-w-md">
           <h3 className="text-sm font-medium text-primary mb-2">变量填写</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="space-y-2">
             {variables.map((name) => (
-              <div key={name}>
-                <label className="text-xs text-text-primary">{name}</label>
+              <div key={name} className="flex items-center gap-2">
+                <label className="text-xs text-text-primary shrink-0 w-16 truncate">{name}</label>
                 <input
                   type="text"
                   value={values[name] || ""}
                   onChange={(e) =>
                     setValues((prev) => ({ ...prev, [name]: e.target.value }))
                   }
-                  className="input-field"
+                  className="input-field max-w-xs"
                   placeholder={
                     prompt.variables.find((v) => v.name === name)?.default || ""
                   }
@@ -174,9 +174,9 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
       </div>
 
       <TestRunPanel
-        systemPrompt={finalContent}
         promptId={prompt.id}
         originalContent={prompt.content}
+        variableValues={values}
         hasMissingVariables={variables.some((name) => !(values[name] ?? "").trim())}
         onSaveContent={onSaveContent}
       />

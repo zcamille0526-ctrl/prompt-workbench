@@ -1,24 +1,25 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import { useChat } from "../hooks/useChat";
 import { MODELS, DEFAULT_MODEL, type ModelId } from "../lib/models";
 import { hasApiKey } from "../lib/apiKey";
+import { substituteVariables } from "../lib/variables";
 import { ApiKeyDialog } from "./ApiKeyDialog";
 
 interface Props {
-  /**
-   * The prompt body that will be sent as the system message — already
-   * variable-substituted. When this changes the chat auto-clears.
-   */
-  systemPrompt: string;
   /** Used as part of the React key so swapping prompts resets state. */
   promptId: string;
   /**
-   * The raw, *un-substituted* prompt content from the database. Used as the
-   * starting point for the temp-edit textarea so users iterate on the
-   * template, not the substituted output.
+   * Raw prompt body from the database (with {{variables}}). Used both as
+   * the editor pre-fill and as the source for substitution.
    */
   originalContent: string;
+  /**
+   * Current values from the parent's variable-fill panel. Used to substitute
+   * variables in either the saved content or the user's temp-edit before
+   * sending to the LLM. Updates here flow into the next API call.
+   */
+  variableValues: Record<string, string>;
   /** Variables present in content but not yet filled — disables sending. */
   hasMissingVariables: boolean;
   /** Persists the temp-edited content back to the prompt record. */
@@ -26,9 +27,9 @@ interface Props {
 }
 
 export function TestRunPanel({
-  systemPrompt,
   promptId,
   originalContent,
+  variableValues,
   hasMissingVariables,
   onSaveContent,
 }: Props) {
@@ -39,14 +40,20 @@ export function TestRunPanel({
   const [, forceRender] = useState(0);
 
   // Temp-edit: a draft of the prompt body the user can iterate on without
-  // touching the saved record. When set, takes precedence over systemPrompt
+  // touching the saved record. When set, takes precedence over originalContent
   // until the user discards it or saves it back.
   const [tempContent, setTempContent] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorDraft, setEditorDraft] = useState("");
   const [savingContent, setSavingContent] = useState(false);
 
-  const effectiveSystemPrompt = tempContent ?? systemPrompt;
+  // Substitute variables on whichever body we're using. This is what the LLM
+  // actually sees as the system prompt, and it updates as the user edits the
+  // variable-fill panel — no need to re-trigger anything.
+  const effectiveSystemPrompt = useMemo(
+    () => substituteVariables(tempContent ?? originalContent, variableValues),
+    [tempContent, originalContent, variableValues]
+  );
 
   const { messages, isLoading, error, sendMessage, clearHistory } = useChat(
     effectiveSystemPrompt,
@@ -127,7 +134,7 @@ export function TestRunPanel({
         className="btn-pill bg-secondary text-primary border border-secondary hover:bg-orange-200 focus-visible:ring-secondary/50 font-medium"
         title="用当前提示词与 DeepSeek 多轮对话"
       >
-        {open ? "收起试运行 ▴" : "🧪 试运行 ▾"}
+        {open ? "收起试运行 ▴" : "试运行 ▾"}
       </button>
 
       {open && (
@@ -163,7 +170,7 @@ export function TestRunPanel({
               <button
                 type="button"
                 onClick={clearHistory}
-                className="text-xs font-medium text-primary/70 hover:text-primary"
+                className="text-xs font-medium bg-surface text-primary border border-gray-300 rounded-full px-3 py-1 hover:bg-gray-50"
               >
                 清空对话
               </button>
