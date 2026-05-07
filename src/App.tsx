@@ -117,6 +117,19 @@ function AuthenticatedApp() {
     setSelectedPrompt(updated);
   };
 
+  const handleSaveContent = async (content: string) => {
+    if (!selectedPrompt) return;
+    const updated = await updatePrompt(selectedPrompt.id, {
+      title: selectedPrompt.title,
+      content,
+      category: selectedPrompt.category,
+      tags: selectedPrompt.tags,
+      variables: selectedPrompt.variables,
+      is_draft: selectedPrompt.is_draft,
+    });
+    setSelectedPrompt(updated);
+  };
+
   const handleNameSubmit = (name: string) => {
     setUserName(name);
     setNameDialogOpen(false);
@@ -179,6 +192,7 @@ function AuthenticatedApp() {
               onEdit={handleEdit}
               onDelete={() => setDeleteOpen(true)}
               onTogglePublish={handleTogglePublish}
+              onSaveContent={handleSaveContent}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-text-primary text-sm">

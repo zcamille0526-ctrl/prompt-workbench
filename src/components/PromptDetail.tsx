@@ -11,9 +11,10 @@ interface Props {
   onEdit: () => void;
   onDelete: () => void;
   onTogglePublish: (next: boolean) => Promise<void>;
+  onSaveContent: (content: string) => Promise<void>;
 }
 
-export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish }: Props) {
+export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSaveContent }: Props) {
   const variables = useMemo(
     () => extractVariables(prompt.content),
     [prompt.content]
@@ -159,25 +160,26 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish }: Prop
         <ReactMarkdown>{finalContent}</ReactMarkdown>
       </div>
 
-      <div className="flex items-center">
-        <button
-          onClick={handleCopy}
-          className="btn-primary"
-        >
-          {copied ? "已复制" : "复制提示词"}
-        </button>
-        <TestRunPanel
-          systemPrompt={finalContent}
-          promptId={prompt.id}
-          hasMissingVariables={variables.some((name) => !(values[name] ?? "").trim())}
-        />
-      </div>
+      <button
+        onClick={handleCopy}
+        className="btn-primary"
+      >
+        {copied ? "已复制" : "复制提示词"}
+      </button>
 
       <div className="mt-4 text-xs text-text-primary">
         创建人：{prompt.created_by} · 更新于{" "}
         {new Date(prompt.updated_at).toLocaleDateString("zh-CN")}
         {localCount > 0 && ` · 使用 ${localCount} 次`}
       </div>
+
+      <TestRunPanel
+        systemPrompt={finalContent}
+        promptId={prompt.id}
+        originalContent={prompt.content}
+        hasMissingVariables={variables.some((name) => !(values[name] ?? "").trim())}
+        onSaveContent={onSaveContent}
+      />
     </div>
   );
 }
