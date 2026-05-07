@@ -28,6 +28,12 @@ const ChatRequestSchema = z
       )
       .min(1)
       .max(40),
+    /**
+     * When true, the response is forwarded as Server-Sent Events containing
+     * OpenAI-compatible delta chunks. When omitted/false, returns a single
+     * JSON {content} (legacy code path; kept for tests and as a fallback).
+     */
+    stream: z.boolean().optional(),
   })
   .strict();
 
@@ -88,7 +94,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const { apiKey, model, messages } = parsed.data;
+  const { apiKey, model, messages, stream } = parsed.data;
+  const wantsStream = stream === true;
 
   // Abort the upstream request if it runs past 28 s — leaves headroom under
   // the 30 s function deadline so we can still send a structured error.
@@ -103,7 +110,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "content-type": "application/json",
         authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({ model, messages, stream: false }),
+      body: JSON.stringify({ model, messages, stream: wantsStream }),
       signal: controller.signal,
     });
   } catch (err) {
@@ -135,6 +142,66 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return chatError(res, upstreamRes.status, mapped.code, mapped.message);
   }
 
+  // ---------------- Streaming path ----------------
+  if (wantsStream) {
+    if (!upstreamRes.body) {
+      safeLog({ endpoint: "/api/chat", method: "POST", status: 502, errorCode: "UPSTREAM_NO_BODY" });
+      return chatError(res, 502, "OTHER", "DeepSeek 未返回流式数据");
+    }
+
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    // Disable nginx-style proxy buffering so chunks arrive in real time on
+    // platforms that introduce intermediate buffers.
+    res.setHeader("X-Accel-Buffering", "no");
+    // Send headers and any preflight bytes immediately
+    if (typeof (res as any).flushHeaders === "function") {
+      (res as any).flushHeaders();
+    }
+
+    const reader = upstreamRes.body.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        // Forward the raw chunk verbatim; DeepSeek emits OpenAI-compat SSE
+        // (`data: {...}\n\n` / `data: [DONE]\n\n`) which the client parses.
+        res.write(decoder.decode(value, { stream: true }));
+      }
+      res.end();
+      safeLog({
+        endpoint: "/api/chat",
+        method: "POST",
+        status: 200,
+        durationMs: Date.now() - startedAt,
+        errorCode: "STREAMED",
+      });
+    } catch (err) {
+      // Mid-stream failure: try to emit a structured SSE error event then end.
+      // The client treats `event: error` differently from a normal `data:`
+      // delta so it can surface a friendly message without polluting content.
+      try {
+        const aborted = err instanceof Error && err.name === "AbortError";
+        const code: ErrorCode = aborted ? "TIMEOUT" : "NETWORK";
+        const message = aborted ? "请求超时，请重试" : "网络中断，请重试";
+        res.write(`event: error\ndata: ${JSON.stringify({ code, message })}\n\n`);
+        res.end();
+      } catch {
+        // socket already closed; nothing more we can do
+      }
+      safeLog({
+        endpoint: "/api/chat",
+        method: "POST",
+        status: 502,
+        errorCode: "STREAM_INTERRUPTED",
+      });
+    }
+    return;
+  }
+
+  // ---------------- Non-streaming path (legacy / fallback) ----------------
   let payload: unknown;
   try {
     payload = await upstreamRes.json();

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { api, ChatError, type ChatMessage } from "../lib/api";
 import { getApiKey } from "../lib/apiKey";
 
@@ -12,7 +12,12 @@ const newId = () =>
 /**
  * Manages a single test-run conversation against the chat endpoint.
  *
- * `systemPrompt` is the resolved prompt content (after variable substitution).
+ * Streaming: a placeholder assistant message is appended immediately so the
+ * UI can show "▍" or similar; each delta updates the content of that message
+ * by id. Errors mid-stream replace the partial content with the error frame
+ * so the user sees what they got before the failure if anything came through,
+ * otherwise the placeholder is removed entirely.
+ *
  * Whenever the system prompt changes, the conversation auto-clears — the old
  * dialogue was conditioned on a different prompt and is no longer meaningful.
  */
@@ -21,12 +26,15 @@ export function useChat(systemPrompt: string, model: string) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
 
+  // Tracks the in-flight stream's placeholder id so deltas can target it.
+  const streamingIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     setMessages([]);
     setError(null);
   }, [systemPrompt]);
 
-  // Internal: send a request given any history slice. Used by both
+  // Internal: stream a request given any history slice. Used by both
   // sendMessage (append-then-send) and regenerate (replay existing tail).
   const callApi = useCallback(
     async (history: UiMessage[]) => {
@@ -37,23 +45,47 @@ export function useChat(systemPrompt: string, model: string) {
       }
       setIsLoading(true);
       setError(null);
+
+      const placeholderId = newId();
+      streamingIdRef.current = placeholderId;
+      // Append a blank assistant message first; deltas will fill it in.
+      setMessages((prev) => [
+        ...prev,
+        { id: placeholderId, role: "assistant", content: "" },
+      ]);
+
       try {
         const payload: ChatMessage[] = [
           { role: "system", content: systemPrompt },
           ...history.map(({ role, content }) => ({ role, content })),
         ];
-        const reply = await api.chat(apiKey, model, payload);
-        setMessages((prev) => [
-          ...prev,
-          { id: newId(), role: "assistant", content: reply },
-        ]);
+        await api.chatStream(apiKey, model, payload, (delta) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === placeholderId ? { ...m, content: m.content + delta } : m
+            )
+          );
+        });
+
+        // If the stream completed but produced no content, drop the empty
+        // placeholder rather than leaving a ghost bubble.
+        setMessages((prev) =>
+          prev.filter((m) => !(m.id === placeholderId && m.content === ""))
+        );
       } catch (e) {
+        // On error: remove the placeholder if it never received any content.
+        // If partial text arrived, leave it visible so the user can copy
+        // whatever was generated before the failure.
+        setMessages((prev) =>
+          prev.filter((m) => !(m.id === placeholderId && m.content === ""))
+        );
         if (e instanceof ChatError) {
           setError({ code: e.code, message: e.message });
         } else {
           setError({ code: "OTHER", message: "请求失败，请重试" });
         }
       } finally {
+        streamingIdRef.current = null;
         setIsLoading(false);
       }
     },
@@ -96,7 +128,6 @@ export function useChat(systemPrompt: string, model: string) {
     setMessages((prev) => {
       const idx = prev.findIndex((m) => m.id === assistantId);
       if (idx === -1) return prev;
-      // Walk back to find the user message that produced it
       const userIdx = idx > 0 && prev[idx - 1].role === "user" ? idx - 1 : idx;
       return [...prev.slice(0, userIdx), ...prev.slice(idx + 1)];
     });
@@ -111,6 +142,7 @@ export function useChat(systemPrompt: string, model: string) {
     messages,
     isLoading,
     error,
+    streamingId: streamingIdRef.current,
     sendMessage,
     regenerateLast,
     deleteAssistantPair,

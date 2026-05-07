@@ -256,3 +256,103 @@ describe("POST /api/chat", () => {
     expect(res.statusCode).toBe(502);
   });
 });
+
+// ---------------- Streaming path ----------------
+
+function mockStreamingRes() {
+  const chunks: string[] = [];
+  let ended = false;
+  const headers: Record<string, string> = {};
+  return {
+    obj: {
+      statusCode: 0,
+      setHeader: vi.fn((k: string, v: string) => {
+        headers[k] = v;
+      }),
+      flushHeaders: vi.fn(),
+      write: vi.fn((s: string) => {
+        chunks.push(s);
+        return true;
+      }),
+      end: vi.fn(() => {
+        ended = true;
+      }),
+      // Fallbacks in case the streaming branch is unexpectedly bypassed
+      status: vi.fn(function (this: any, code: number) {
+        this.statusCode = code;
+        return this;
+      }),
+      json: vi.fn(),
+    } as any,
+    chunks,
+    headers,
+    isEnded: () => ended,
+  };
+}
+
+function streamFromChunks(rawChunks: string[]) {
+  // Build a ReadableStream-like object with a getReader() compatible with the
+  // handler's `for await` loop. Returns Uint8Array chunks.
+  const enc = new TextEncoder();
+  let i = 0;
+  return {
+    getReader() {
+      return {
+        async read() {
+          if (i >= rawChunks.length) return { done: true, value: undefined };
+          const value = enc.encode(rawChunks[i++]);
+          return { done: false, value };
+        },
+      };
+    },
+  };
+}
+
+describe("POST /api/chat — streaming", () => {
+  it("forwards SSE chunks verbatim and ends the response", async () => {
+    const sse = [
+      'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":" there"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ];
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: streamFromChunks(sse),
+    })) as any;
+
+    const req = makeReq({
+      method: "POST",
+      authorization: `Bearer ${token}`,
+      body: { ...validBody, stream: true },
+    });
+    const r = mockStreamingRes();
+    await chatHandler(req, r.obj as unknown as VercelResponse);
+
+    expect(r.headers["Content-Type"]).toMatch(/text\/event-stream/);
+    expect(r.isEnded()).toBe(true);
+    const out = r.chunks.join("");
+    expect(out).toContain('"hi"');
+    expect(out).toContain('" there"');
+    expect(out).toContain("[DONE]");
+  });
+
+  it("returns JSON 401 (not SSE) when upstream key is invalid in stream mode", async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({}),
+    })) as any;
+
+    const req = makeReq({
+      method: "POST",
+      authorization: `Bearer ${token}`,
+      body: { ...validBody, stream: true },
+    });
+    const res = makeRes();
+    await chatHandler(req, res as unknown as VercelResponse);
+
+    expect(res.statusCode).toBe(401);
+    expect((res.body as any).error.code).toBe("INVALID_KEY");
+  });
+});

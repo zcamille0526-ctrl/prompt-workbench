@@ -304,6 +304,8 @@ export function TestRunPanel({
             {messages.map((m, idx) => {
               const isAssistant = m.role === "assistant";
               const isLast = idx === messages.length - 1;
+              const isStreamingThis = isAssistant && isLoading && isLast;
+              const showThinking = isStreamingThis && m.content.length === 0;
               return (
                 <div key={m.id} className={isAssistant ? "" : "flex justify-end"}>
                   <div
@@ -316,18 +318,27 @@ export function TestRunPanel({
                     {isAssistant ? (
                       <>
                         <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-primary">
-                          <div className="prose prose-sm prose-gray max-w-none prose-p:my-1 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1 prose-p:text-primary prose-li:text-primary prose-strong:text-primary">
-                            <ReactMarkdown>{m.content}</ReactMarkdown>
-                          </div>
+                          {showThinking ? (
+                            <span className="text-primary/60">思考中...</span>
+                          ) : (
+                            <div className="prose prose-sm prose-gray max-w-none prose-p:my-1 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1 prose-p:text-primary prose-li:text-primary prose-strong:text-primary">
+                              <ReactMarkdown>{m.content}</ReactMarkdown>
+                              {isStreamingThis && (
+                                <span className="inline-block w-1.5 h-4 align-text-bottom bg-primary/50 animate-pulse ml-0.5" aria-hidden />
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <AssistantActions
-                          message={m.content}
-                          isLast={isLast}
-                          isLoading={isLoading}
-                          onRegenerate={() => void regenerateLast()}
-                          onDelete={() => deleteAssistantPair(m.id)}
-                          onAskFollowup={() => inputRef.current?.focus()}
-                        />
+                        {!isStreamingThis && m.content.length > 0 && (
+                          <AssistantActions
+                            message={m.content}
+                            isLast={isLast}
+                            isLoading={isLoading}
+                            onRegenerate={() => void regenerateLast()}
+                            onDelete={() => deleteAssistantPair(m.id)}
+                            onAskFollowup={() => inputRef.current?.focus()}
+                          />
+                        )}
                       </>
                     ) : (
                       <span className="whitespace-pre-wrap">{m.content}</span>
@@ -336,13 +347,6 @@ export function TestRunPanel({
                 </div>
               );
             })}
-            {isLoading && (
-              <div className="flex justify-start">
-                <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-primary/60">
-                  思考中...
-                </div>
-              </div>
-            )}
             {error && (
               <div className="text-error text-sm font-medium bg-red-50 border border-red-200 rounded px-3 py-2">
                 {error.message}

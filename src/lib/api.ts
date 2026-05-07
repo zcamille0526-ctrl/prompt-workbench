@@ -151,6 +151,121 @@ class ApiClient {
     return body.content;
   }
 
+  /**
+   * Streaming variant of chat(). Calls onDelta with each token chunk as it
+   * arrives, then resolves with the full concatenated reply when the upstream
+   * emits [DONE]. Errors mid-stream surface as ChatError exceptions.
+   *
+   * The wire format is OpenAI-compatible SSE forwarded as-is from DeepSeek:
+   *   data: {"choices":[{"delta":{"content":"..."}}]}\n\n
+   *   data: [DONE]\n\n
+   * Plus our server may emit an SSE `event: error` frame on mid-stream
+   * failure with a JSON body matching ChatError.
+   */
+  async chatStream(
+    apiKey: string,
+    model: string,
+    messages: ChatMessage[],
+    onDelta: (chunk: string) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    const token = this.getToken();
+    if (!token) throw new ChatError("OTHER", "Not authenticated");
+
+    const res = await fetch(`${API_BASE_URL}/api/chat`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ apiKey, model, messages, stream: true }),
+      signal,
+    });
+
+    if (res.status === 401) {
+      this.clearToken();
+      throw new ChatError("OTHER", "Session expired");
+    }
+
+    // Non-OK responses come back as JSON {error:{code,message}} (the server
+    // bails out before switching to SSE for input/upstream errors).
+    if (!res.ok) {
+      let body: any;
+      try {
+        body = await res.json();
+      } catch {
+        throw new ChatError("NETWORK", "服务返回了无效响应");
+      }
+      const err = body?.error;
+      if (err && typeof err === "object" && err.code) {
+        throw new ChatError(err.code, err.message || "请求失败");
+      }
+      throw new ChatError("OTHER", "请求失败");
+    }
+
+    if (!res.body) throw new ChatError("OTHER", "服务未返回流式响应");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+
+    // Each SSE event is delimited by a blank line. We accumulate bytes,
+    // peel off complete events, and parse each one. An event is one or
+    // more `field: value` lines; we only care about `event:` and `data:`.
+    const processEvent = (block: string) => {
+      let eventName = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (dataLines.length === 0) return;
+      const data = dataLines.join("\n");
+
+      if (eventName === "error") {
+        let parsed: any = {};
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          /* noop */
+        }
+        throw new ChatError(parsed.code ?? "OTHER", parsed.message ?? "请求失败");
+      }
+
+      if (data === "[DONE]") return;
+
+      try {
+        const json = JSON.parse(data);
+        const delta = json?.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta.length > 0) {
+          full += delta;
+          onDelta(delta);
+        }
+      } catch {
+        // Ignore malformed individual chunks; DeepSeek sometimes pads with
+        // keep-alive comments. Don't tear down the whole stream over one bad
+        // line — the [DONE] sentinel still tells us when we're finished.
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        if (block.trim().length > 0) processEvent(block);
+      }
+    }
+    // Flush any trailing block (no terminating blank line)
+    if (buffer.trim().length > 0) processEvent(buffer);
+
+    return full;
+  }
+
   // -------- Examples (saved test-run conversations) --------
 
   async listExamples(promptId: string, viewer: string): Promise<unknown[]> {
