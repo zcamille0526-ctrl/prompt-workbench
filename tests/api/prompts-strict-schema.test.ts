@@ -191,7 +191,7 @@ describe("PUT /api/prompts — strict schema rejects unknown fields", () => {
     const req = makeReq({
       method: "PUT",
       body: validUpdateBody,
-      query: { id: "abc" },
+      query: { id: "abc", viewer: "alice" },
       authorization: `Bearer ${token}`,
     });
     const res = makeRes();

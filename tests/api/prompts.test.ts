@@ -316,7 +316,24 @@ describe("PUT /api/prompts — draft owner check", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("allows any user to edit published prompts", async () => {
+  it("returns 403 when editing a published prompt as non-owner", async () => {
+    const fetchC = makeFetchExisting({ is_draft: false, created_by: "alice" });
+    mockFrom.mockReturnValueOnce(fetchC.obj);
+
+    const req = makeReq({
+      method: "PUT",
+      query: { id: "p1", viewer: "bob" }, // different from owner
+      authorization: `Bearer ${token}`,
+      body: { title: "new", content: "y", category: "通用", tags: [], variables: [] },
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+
+    expect(res.statusCode).toBe(403);
+    expect(mockFrom).toHaveBeenCalledTimes(1); // never reached the update call
+  });
+
+  it("allows the owner to edit a published prompt", async () => {
     const fetchC = makeFetchExisting({ is_draft: false, created_by: "alice" });
     const updateC = chain({ data: { id: "p1", title: "new" }, error: null });
     let call = 0;
@@ -324,7 +341,7 @@ describe("PUT /api/prompts — draft owner check", () => {
 
     const req = makeReq({
       method: "PUT",
-      query: { id: "p1", viewer: "bob" }, // different from owner
+      query: { id: "p1", viewer: "alice" },
       authorization: `Bearer ${token}`,
       body: { title: "new", content: "y", category: "通用", tags: [], variables: [] },
     });
@@ -355,7 +372,26 @@ describe("DELETE /api/prompts — draft owner check", () => {
     expect(mockFrom).toHaveBeenCalledTimes(1);
   });
 
-  it("allows deletion of published prompts by any user", async () => {
+  it("returns 403 when deleting a published prompt as non-owner", async () => {
+    const fetchC = chain({
+      data: { is_draft: false, created_by: "alice" },
+      error: null,
+    });
+    mockFrom.mockReturnValueOnce(fetchC.obj);
+
+    const req = makeReq({
+      method: "DELETE",
+      query: { id: "p1", viewer: "bob" },
+      authorization: `Bearer ${token}`,
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+
+    expect(res.statusCode).toBe(403);
+    expect(mockFrom).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows the owner to delete a published prompt", async () => {
     const fetchC = chain({
       data: { is_draft: false, created_by: "alice" },
       error: null,
@@ -366,7 +402,7 @@ describe("DELETE /api/prompts — draft owner check", () => {
 
     const req = makeReq({
       method: "DELETE",
-      query: { id: "p1", viewer: "bob" },
+      query: { id: "p1", viewer: "alice" },
       authorization: `Bearer ${token}`,
     });
     const res = makeRes();

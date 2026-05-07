@@ -144,11 +144,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(404).json({ error: "Prompt not found" });
     }
 
-    if (existing.is_draft) {
-      if (!viewer || viewer !== existing.created_by) {
-        safeLog({ endpoint: "/api/prompts", method: "PUT", status: 403, errorCode: "DRAFT_OWNER" });
-        return res.status(403).json({ error: "Only the draft owner can edit this prompt" });
-      }
+    // Owner-only edit: viewer must match the prompt's created_by, regardless
+    // of draft state. Original spec allowed any viewer to edit published
+    // prompts; tightened so a teammate can't quietly clobber someone else's
+    // saved work just by being signed in.
+    if (!viewer || viewer !== existing.created_by) {
+      const code = existing.is_draft ? "DRAFT_OWNER" : "OWNER";
+      safeLog({ endpoint: "/api/prompts", method: "PUT", status: 403, errorCode: code });
+      return res.status(403).json({
+        error: existing.is_draft
+          ? "Only the draft owner can edit this prompt"
+          : "Only the prompt creator can edit this prompt",
+      });
     }
 
     const updateData = pickFields(parsed.data, PUT_ALLOWED_FIELDS);
@@ -178,11 +185,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(404).json({ error: "Prompt not found" });
     }
 
-    if (existing.is_draft) {
-      if (!viewer || viewer !== existing.created_by) {
-        safeLog({ endpoint: "/api/prompts", method: "DELETE", status: 403, errorCode: "DRAFT_OWNER" });
-        return res.status(403).json({ error: "Only the draft owner can delete this prompt" });
-      }
+    // Owner-only delete (mirrors the PUT rule).
+    if (!viewer || viewer !== existing.created_by) {
+      const code = existing.is_draft ? "DRAFT_OWNER" : "OWNER";
+      safeLog({ endpoint: "/api/prompts", method: "DELETE", status: 403, errorCode: code });
+      return res.status(403).json({
+        error: existing.is_draft
+          ? "Only the draft owner can delete this prompt"
+          : "Only the prompt creator can delete this prompt",
+      });
     }
 
     const { error } = await supabase.from("prompts").delete().eq("id", id);

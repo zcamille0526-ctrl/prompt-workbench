@@ -140,7 +140,7 @@ describe("PUT /api/prompts — owner protection", () => {
         tags: [],
         variables: [],
       },
-      query: { id: "abc" },
+      query: { id: "abc", viewer: "alice" },
       authorization: `Bearer ${token}`,
     });
     const res = makeRes();

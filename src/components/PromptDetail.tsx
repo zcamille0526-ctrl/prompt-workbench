@@ -142,18 +142,22 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
               {isToggling ? "处理中..." : "转为草稿"}
             </button>
           )}
-          <button
-            onClick={onEdit}
-            className="btn-secondary"
-          >
-            编辑
-          </button>
-          <button
-            onClick={onDelete}
-            className="btn-pill border border-error/30 text-error hover:bg-red-50 focus-visible:ring-error/30"
-          >
-            删除
-          </button>
+          {isOwner && (
+            <>
+              <button
+                onClick={onEdit}
+                className="btn-secondary"
+              >
+                编辑
+              </button>
+              <button
+                onClick={onDelete}
+                className="btn-pill border border-error/30 text-error hover:bg-red-50 focus-visible:ring-error/30"
+              >
+                删除
+              </button>
+            </>
+          )}
         </div>
       </div>
 
