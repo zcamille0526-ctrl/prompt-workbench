@@ -26,7 +26,7 @@
 
 - 折叠状态下显示数量：`📝 3 个示例`
 - 展开后显示每个示例：标题、变量值、对话内容（user/assistant 气泡）、创建人、创建时间
-- **第一版任何登录用户都可删任何示例**（不做创建人校验，第二版加权限）
+- **第一版只有"创建人"和"提示词 owner"可删**（方案 B）：避免他人被随意删除自己的示例；prompt owner 仍可清理（避免示例失控）。第二版引入完整用户体系后再细化
 - **拉取时机**：打开提示词详情时自动 fetch 该 prompt 的所有 examples（首屏一次性加载，性能可接受因为每条最多 5 个）
 - **不订阅 Realtime**：第一版不做实时同步，刷新或重新进入详情才能看到他人新增的示例
 
@@ -89,9 +89,9 @@ create policy "service_role_all_examples" on examples
 ### 5.1 后端
 
 新增 `api/examples.ts`（serverless function）：
-- GET `/api/examples?prompt_id=xxx` —— 列出某条提示词的所有示例（按 created_at desc）
+- GET `/api/examples?prompt_id=xxx&viewer=yyy` —— 列出某条提示词的所有示例（按 created_at desc）。**草稿提示词的示例只对 owner 可见**：后端先读 prompt 的 is_draft / created_by；若是草稿且 viewer ≠ owner，返回 403
 - POST `/api/examples` —— 创建示例。**created_by 由前端传入并存储（信任前端）**。第一版的认证模式是共享密码，无独立用户身份，伪造 created_by 是已知风险但不阻塞团队内部使用。第二版若引入用户体系，则改为后端从认证上下文取
-- DELETE `/api/examples?id=xxx` —— 删除示例。**任何登录用户均可删任何示例**（不做创建人校验）
+- DELETE `/api/examples?id=xxx&viewer=yyy` —— 删除示例。**只有示例创建人本人 OR 该 prompt 的 owner 可删**（方案 B）；其他用户返回 403
 - 鉴权：复用 `verifyToken`
 - POST 时：`select count(*)` 检查 prompt_id 下是否已有 5 个示例，超过则返回 400。**已知问题**：5 个上限存在 TOCTOU 竞态（两个用户并发提交可能各看到 4 然后都成功），第一版接受这个 1-2 的偏差
 - POST 用 Zod 校验请求体
@@ -142,7 +142,7 @@ export interface Example extends ExampleInput {
 
 ## 6. 数据迁移
 
-新增 `supabase/migrations/003_create_examples.sql`，需要在 Supabase SQL Editor 中手动执行。
+新增 `supabase/migrations/005_create_examples.sql`，需要在 Supabase SQL Editor 中手动执行。（004 已用于草稿功能。）
 
 ## 7. 界面设计
 
@@ -185,6 +185,7 @@ export interface Example extends ExampleInput {
 - 不做"哪些示例最有帮助"统计
 - 不做权限控制（任何登录用户都可删任何示例，第二版加权限）
 - 不做导出（一并随提示词导出 JSON 时再加）
+- 不做精细权限分级（owner/created_by 之外的用户不可删；第二版引入用户体系后再放宽或收紧）
 
 ## 10. 工作量估算
 

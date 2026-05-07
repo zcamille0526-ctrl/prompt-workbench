@@ -150,6 +150,27 @@ class ApiClient {
     }
     return body.content;
   }
+
+  // -------- Examples (saved test-run conversations) --------
+
+  async listExamples(promptId: string, viewer: string): Promise<unknown[]> {
+    const qs = new URLSearchParams({ prompt_id: promptId });
+    if (viewer) qs.set("viewer", viewer);
+    return this.request(`/api/examples?${qs.toString()}`);
+  }
+
+  async createExample(input: unknown): Promise<unknown> {
+    return this.request("/api/examples", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async deleteExample(id: string, viewer: string): Promise<void> {
+    const qs = new URLSearchParams({ id });
+    if (viewer) qs.set("viewer", viewer);
+    await this.request(`/api/examples?${qs.toString()}`, { method: "DELETE" });
+  }
 }
 
 export const api = new ApiClient();

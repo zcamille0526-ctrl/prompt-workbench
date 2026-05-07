@@ -5,6 +5,8 @@ import { extractVariables, substituteVariables } from "../lib/variables";
 import { api } from "../lib/api";
 import { getUserName } from "../lib/userName";
 import { TestRunPanel } from "./TestRunPanel";
+import { ExamplesList } from "./ExamplesList";
+import { useExamples } from "../hooks/useExamples";
 
 interface Props {
   prompt: Prompt;
@@ -38,6 +40,29 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
   );
 
   const isOwner = prompt.created_by === getUserName();
+
+  // Examples lifted here so both the test-run save action and the list view
+  // share state — saving an example optimistically prepends it to the list.
+  const { examples, isLoading: examplesLoading, error: examplesError, createExample, deleteExample } =
+    useExamples(prompt.id);
+
+  const handleSaveExample = async (input: {
+    title: string;
+    model: string;
+    messages: Array<{ role: "user" | "assistant"; content: string }>;
+    variable_values: Record<string, string>;
+  }) => {
+    const userName = getUserName();
+    if (!userName) throw new Error("请先在设置中填写名字");
+    await createExample({
+      prompt_id: prompt.id,
+      title: input.title || undefined,
+      variable_values: input.variable_values,
+      model: input.model,
+      messages: input.messages,
+      created_by: userName,
+    });
+  };
 
   const handleTogglePublish = async () => {
     setIsToggling(true);
@@ -168,10 +193,18 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
       </button>
 
       <div className="mt-4 text-xs text-text-primary">
-        创建人：{prompt.created_by} · 更新于{" "}
+        创建人:{prompt.created_by} · 更新于{" "}
         {new Date(prompt.updated_at).toLocaleDateString("zh-CN")}
         {localCount > 0 && ` · 使用 ${localCount} 次`}
       </div>
+
+      <ExamplesList
+        examples={examples}
+        isLoading={examplesLoading}
+        error={examplesError}
+        promptCreatedBy={prompt.created_by}
+        onDelete={deleteExample}
+      />
 
       <TestRunPanel
         promptId={prompt.id}
@@ -179,6 +212,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
         variableValues={values}
         hasMissingVariables={variables.some((name) => !(values[name] ?? "").trim())}
         onSaveContent={onSaveContent}
+        onSaveExample={handleSaveExample}
       />
     </div>
   );

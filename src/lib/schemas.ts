@@ -60,3 +60,37 @@ export interface Prompt {
   use_count: number;
   is_draft: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Examples — saved test-run conversations attached to a prompt.
+
+export const ExampleMessageSchema = z
+  .object({
+    role: z.enum(["user", "assistant"]),
+    content: z.string().min(1).max(20_000),
+  })
+  .strict();
+
+export const ExampleCreateSchema = z
+  .object({
+    prompt_id: z.string().uuid(),
+    title: z.string().max(100).optional(),
+    variable_values: z.record(z.string(), z.string()).default({}),
+    model: z.string().min(1).max(64),
+    messages: z.array(ExampleMessageSchema).min(2).max(40),
+    created_by: z.string().min(1).max(64),
+  })
+  .strict();
+
+export type ExampleCreateInput = z.infer<typeof ExampleCreateSchema>;
+
+export interface Example {
+  id: string;
+  prompt_id: string;
+  title: string | null;
+  variable_values: Record<string, string>;
+  model: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  created_by: string;
+  created_at: string;
+}

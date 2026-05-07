@@ -5,6 +5,7 @@ import { MODELS, DEFAULT_MODEL, type ModelId } from "../lib/models";
 import { hasApiKey } from "../lib/apiKey";
 import { substituteVariables } from "../lib/variables";
 import { ApiKeyDialog } from "./ApiKeyDialog";
+import { SaveExampleDialog } from "./SaveExampleDialog";
 
 interface Props {
   /** Used as part of the React key so swapping prompts resets state. */
@@ -24,6 +25,16 @@ interface Props {
   hasMissingVariables: boolean;
   /** Persists the temp-edited content back to the prompt record. */
   onSaveContent: (content: string) => Promise<void>;
+  /**
+   * Persists the current conversation as an Example. Receives title, model,
+   * and the user/assistant messages (system stripped, since system = prompt).
+   */
+  onSaveExample: (input: {
+    title: string;
+    model: string;
+    messages: Array<{ role: "user" | "assistant"; content: string }>;
+    variable_values: Record<string, string>;
+  }) => Promise<void>;
 }
 
 export function TestRunPanel({
@@ -32,6 +43,7 @@ export function TestRunPanel({
   variableValues,
   hasMissingVariables,
   onSaveContent,
+  onSaveExample,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
@@ -46,6 +58,10 @@ export function TestRunPanel({
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorDraft, setEditorDraft] = useState("");
   const [savingContent, setSavingContent] = useState(false);
+
+  // Save-as-example dialog state. Lives here (not parent) so we can wire it
+  // straight from the chat history.
+  const [saveExampleOpen, setSaveExampleOpen] = useState(false);
 
   // Substitute variables on whichever body we're using. This is what the LLM
   // actually sees as the system prompt, and it updates as the user edits the
@@ -79,6 +95,21 @@ export function TestRunPanel({
   const keySet = hasApiKey();
   const canSend =
     keySet && !hasMissingVariables && !isLoading && input.trim().length > 0;
+
+  // At least one full exchange (user → assistant) needs to exist before
+  // there's anything worth saving as an example.
+  const hasCompleteExchange = useMemo(
+    () =>
+      messages.some((m) => m.role === "user") &&
+      messages.some((m) => m.role === "assistant"),
+    [messages]
+  );
+
+  // The model dropdown stores the id; for the save dialog we want a label.
+  const modelLabel = useMemo(
+    () => MODELS.find((m) => m.id === model)?.label ?? model,
+    [model]
+  );
 
   const handleOpenToggle = () => {
     if (!keySet) {
@@ -166,6 +197,17 @@ export function TestRunPanel({
               <span className="text-xs font-semibold bg-amber-200 text-amber-900 rounded-full px-2 py-0.5">
                 临时编辑中
               </span>
+            )}
+            {messages.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSaveExampleOpen(true)}
+                disabled={!hasCompleteExchange}
+                className="text-xs font-medium bg-secondary text-primary border border-secondary rounded-full px-3 py-1 hover:bg-orange-200 disabled:opacity-50"
+                title={hasCompleteExchange ? "把这次对话存为示例，供同事参考" : "至少需要一轮 user→assistant 完整对话"}
+              >
+                💾 保存为示例
+              </button>
             )}
             {messages.length > 0 && (
               <button
@@ -345,6 +387,27 @@ export function TestRunPanel({
         onSaved={() => {
           forceRender((n) => n + 1);
           setOpen(true);
+        }}
+      />
+
+      <SaveExampleDialog
+        open={saveExampleOpen}
+        onOpenChange={setSaveExampleOpen}
+        messages={messages}
+        variableValues={variableValues}
+        modelLabel={modelLabel}
+        onSave={async (title) => {
+          await onSaveExample({
+            title,
+            model,
+            messages: messages
+              .filter((m) => m.role === "user" || m.role === "assistant")
+              .map(({ role, content }) => ({
+                role: role as "user" | "assistant",
+                content,
+              })),
+            variable_values: variableValues,
+          });
         }}
       />
     </div>
