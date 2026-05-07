@@ -4,6 +4,7 @@ import type { Prompt } from "../lib/schemas";
 import { extractVariables, substituteVariables } from "../lib/variables";
 import { api } from "../lib/api";
 import { getUserName } from "../lib/userName";
+import { TestRunPanel } from "./TestRunPanel";
 
 interface Props {
   prompt: Prompt;
@@ -158,12 +159,19 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish }: Prop
         <ReactMarkdown>{finalContent}</ReactMarkdown>
       </div>
 
-      <button
-        onClick={handleCopy}
-        className="btn-primary"
-      >
-        {copied ? "已复制" : "复制提示词"}
-      </button>
+      <div className="flex items-center">
+        <button
+          onClick={handleCopy}
+          className="btn-primary"
+        >
+          {copied ? "已复制" : "复制提示词"}
+        </button>
+        <TestRunPanel
+          systemPrompt={finalContent}
+          promptId={prompt.id}
+          hasMissingVariables={variables.some((name) => !(values[name] ?? "").trim())}
+        />
+      </div>
 
       <div className="mt-4 text-xs text-text-primary">
         创建人：{prompt.created_by} · 更新于{" "}

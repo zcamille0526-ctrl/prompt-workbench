@@ -1,5 +1,28 @@
 import { API_BASE_URL } from "./constants";
 
+export type ChatMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
+export type ChatErrorCode =
+  | "INVALID_KEY"
+  | "INSUFFICIENT_BALANCE"
+  | "RATE_LIMITED"
+  | "TIMEOUT"
+  | "NETWORK"
+  | "OTHER";
+
+export class ChatError extends Error {
+  code: ChatErrorCode;
+
+  constructor(code: ChatErrorCode, message: string) {
+    super(message);
+    this.code = code;
+    this.name = "ChatError";
+  }
+}
+
 class ApiClient {
   private token: string | null = null;
 
@@ -77,6 +100,55 @@ class ApiClient {
     } catch {
       // intentionally silent
     }
+  }
+
+  /**
+   * Sends a chat completion request through our server-side DeepSeek proxy.
+   * The user's API key is forwarded in the request body — never persisted
+   * server-side. Throws ChatError with a stable code so callers can render
+   * the right message without parsing strings.
+   */
+  async chat(
+    apiKey: string,
+    model: string,
+    messages: ChatMessage[]
+  ): Promise<string> {
+    const token = this.getToken();
+    if (!token) throw new ChatError("OTHER", "Not authenticated");
+
+    const res = await fetch(`${API_BASE_URL}/api/chat`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ apiKey, model, messages }),
+    });
+
+    if (res.status === 401) {
+      this.clearToken();
+      throw new ChatError("OTHER", "Session expired");
+    }
+
+    let body: any;
+    try {
+      body = await res.json();
+    } catch {
+      throw new ChatError("NETWORK", "服务返回了无效响应");
+    }
+
+    if (!res.ok) {
+      const err = body?.error;
+      if (err && typeof err === "object" && err.code) {
+        throw new ChatError(err.code, err.message || "请求失败");
+      }
+      throw new ChatError("OTHER", "请求失败");
+    }
+
+    if (typeof body?.content !== "string") {
+      throw new ChatError("OTHER", "服务返回了无效响应");
+    }
+    return body.content;
   }
 }
 

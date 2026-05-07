@@ -1,6 +1,7 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { getUserName, setUserName, isValidUserName } from "../lib/userName";
+import { getApiKey, setApiKey, clearApiKey } from "../lib/apiKey";
 import type { Prompt } from "../lib/schemas";
 
 interface Props {
@@ -13,7 +14,9 @@ interface Props {
 export function SettingsDialog({ open, onOpenChange, prompts, onNameChange }: Props) {
   const currentName = getUserName();
   const [name, setName] = useState(currentName);
-  const [error, setError] = useState<string | null>(null);
+  const [apiKey, setApiKeyInput] = useState(() => getApiKey());
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [keyError, setKeyError] = useState<string | null>(null);
   const [confirmStep, setConfirmStep] = useState(false);
 
   const draftCount = prompts.filter(
@@ -21,28 +24,44 @@ export function SettingsDialog({ open, onOpenChange, prompts, onNameChange }: Pr
   ).length;
 
   const handleSave = () => {
-    const trimmed = name.trim();
-    if (!isValidUserName(trimmed)) {
-      setError("名字需为 1-32 个中文/英文/数字/空格/_-");
+    const trimmedName = name.trim();
+    if (!isValidUserName(trimmedName)) {
+      setNameError("名字需为 1-32 个中文/英文/数字/空格/_-");
       return;
     }
-    if (trimmed === currentName) {
-      onOpenChange(false);
+
+    const trimmedKey = apiKey.trim();
+    if (trimmedKey && trimmedKey.length < 16) {
+      setKeyError("API Key 看起来不完整，请检查");
       return;
     }
-    if (draftCount > 0 && !confirmStep) {
+
+    if (trimmedName !== currentName && draftCount > 0 && !confirmStep) {
       setConfirmStep(true);
       return;
     }
-    setUserName(trimmed);
+
+    if (trimmedName !== currentName) {
+      setUserName(trimmedName);
+      onNameChange();
+    }
+
+    if (trimmedKey) {
+      setApiKey(trimmedKey);
+    } else {
+      // empty string = explicit clear
+      clearApiKey();
+    }
+
     setConfirmStep(false);
     onOpenChange(false);
-    onNameChange();
   };
 
   const handleCancel = () => {
     setName(currentName);
-    setError(null);
+    setApiKeyInput(getApiKey());
+    setNameError(null);
+    setKeyError(null);
     setConfirmStep(false);
     onOpenChange(false);
   };
@@ -63,18 +82,38 @@ export function SettingsDialog({ open, onOpenChange, prompts, onNameChange }: Pr
               value={name}
               onChange={(e) => {
                 setName(e.target.value);
-                setError(null);
+                setNameError(null);
                 setConfirmStep(false);
               }}
               className="input-field mt-1"
               maxLength={32}
             />
-            {error && <p className="text-error text-xs mt-2">{error}</p>}
+            {nameError && <p className="text-error text-xs mt-2">{nameError}</p>}
             {confirmStep && (
               <p className="text-amber-600 text-xs mt-2">
                 改名后你将无法访问当前 {draftCount} 个草稿提示词，需用旧名字才能再次访问。确认改名？
               </p>
             )}
+          </div>
+
+          <div className="mt-4">
+            <label className="text-sm font-medium text-text-primary">
+              DeepSeek API Key（用于试运行）
+            </label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => {
+                setApiKeyInput(e.target.value);
+                setKeyError(null);
+              }}
+              placeholder="留空则清除已保存的 Key"
+              className="input-field font-mono mt-1"
+            />
+            {keyError && <p className="text-error text-xs mt-2">{keyError}</p>}
+            <p className="text-xs text-text-primary/70 mt-1">
+              仅保存在当前浏览器标签内存中，关闭后清空。
+            </p>
           </div>
 
           <div className="flex justify-end gap-2 mt-6">
