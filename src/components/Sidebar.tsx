@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { CATEGORIES } from "../lib/constants";
 
 interface Props {
@@ -12,6 +13,8 @@ interface Props {
   onClearTag: () => void;
 }
 
+const COLLAPSED_KEY = "sidebar_collapsed";
+
 export function Sidebar({
   selectedCategory,
   onSelectCategory,
@@ -23,12 +26,60 @@ export function Sidebar({
   selectedTag,
   onClearTag,
 }: Props) {
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem(COLLAPSED_KEY) === "1";
+  });
+
+  useEffect(() => {
+    localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
+  }, [collapsed]);
+
+  if (collapsed) {
+    return (
+      <aside className="w-12 bg-primary text-white flex flex-col h-full rounded-lg items-center py-3 gap-2">
+        <button
+          onClick={() => setCollapsed(false)}
+          className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-white/10 text-lg"
+          title="展开侧边栏"
+          aria-label="展开侧边栏"
+        >
+          ☰
+        </button>
+        <button
+          onClick={onNewPrompt}
+          className="w-9 h-9 flex items-center justify-center rounded-full bg-secondary text-primary hover:bg-orange-200 text-lg"
+          title="新建提示词"
+          aria-label="新建提示词"
+        >
+          +
+        </button>
+        <div className="flex-1" />
+        <button
+          onClick={onOpenSettings}
+          className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-white/10 text-base"
+          title="设置"
+          aria-label="设置"
+        >
+          ⚙️
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="w-60 bg-primary text-white flex flex-col h-full rounded-lg">
       <div className="p-4">
-        <h2 className="text-lg font-medium text-white mb-4">
-          提示词工作台
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-medium text-white">提示词工作台</h2>
+          <button
+            onClick={() => setCollapsed(true)}
+            className="text-white/60 hover:text-white text-sm w-7 h-7 rounded-full hover:bg-white/10 flex items-center justify-center"
+            title="收起侧边栏"
+            aria-label="收起侧边栏"
+          >
+            ‹
+          </button>
+        </div>
         <label className="sr-only" htmlFor="search-input">搜索</label>
         <input
           id="search-input"
