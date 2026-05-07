@@ -145,7 +145,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
                   onChange={(e) =>
                     setValues((prev) => ({ ...prev, [name]: e.target.value }))
                   }
-                  className="input-field max-w-[200px]"
+                  className="input-field max-w-[120px]"
                   placeholder={
                     prompt.variables.find((v) => v.name === name)?.default || ""
                   }
