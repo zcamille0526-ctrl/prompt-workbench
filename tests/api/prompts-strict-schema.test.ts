@@ -168,13 +168,25 @@ describe("POST /api/prompts — strict schema rejects unknown fields", () => {
 
 describe("PUT /api/prompts — strict schema rejects unknown fields", () => {
   it("accepts valid update body", async () => {
-    const singleMock = vi
+    // Handler now pre-fetches the row for the draft-owner check, then updates.
+    // First mockFrom() call → SELECT existing; second → UPDATE.
+    const fetchSingle = vi
+      .fn()
+      .mockResolvedValue({ data: { is_draft: false, created_by: "alice" }, error: null });
+    const fetchEq = vi.fn().mockReturnValue({ single: fetchSingle });
+    const fetchSelect = vi.fn().mockReturnValue({ eq: fetchEq });
+
+    const updSingle = vi
       .fn()
       .mockResolvedValue({ data: { id: "abc", ...validUpdateBody }, error: null });
-    const selectMock = vi.fn().mockReturnValue({ single: singleMock });
-    const eqMock = vi.fn().mockReturnValue({ select: selectMock });
-    const updateMock = vi.fn().mockReturnValue({ eq: eqMock });
-    mockFrom.mockReturnValue({ update: updateMock });
+    const updSelect = vi.fn().mockReturnValue({ single: updSingle });
+    const updEq = vi.fn().mockReturnValue({ select: updSelect });
+    const updateFn = vi.fn().mockReturnValue({ eq: updEq });
+
+    let n = 0;
+    mockFrom.mockImplementation(() =>
+      ++n === 1 ? { select: fetchSelect } : { update: updateFn }
+    );
 
     const req = makeReq({
       method: "PUT",

@@ -7,6 +7,7 @@ interface Props {
   onSearchChange: (query: string) => void;
   onExport: () => void;
   onNewPrompt: () => void;
+  onOpenSettings: () => void;
   selectedTag: string | null;
   onClearTag: () => void;
 }
@@ -18,6 +19,7 @@ export function Sidebar({
   onSearchChange,
   onExport,
   onNewPrompt,
+  onOpenSettings,
   selectedTag,
   onClearTag,
 }: Props) {
@@ -85,7 +87,13 @@ export function Sidebar({
           </button>
         ))}
       </nav>
-      <div className="p-4 border-t border-white/10">
+      <div className="p-4 border-t border-white/10 space-y-2">
+        <button
+          onClick={onOpenSettings}
+          className="w-full py-2 text-sm text-white/80 border border-white/20 rounded-full hover:bg-white/10 transition-colors duration-150"
+        >
+          ⚙️ 设置
+        </button>
         <button
           onClick={onExport}
           className="w-full py-2 text-sm text-white/80 border border-white/20 rounded-full hover:bg-white/10 transition-colors duration-150"

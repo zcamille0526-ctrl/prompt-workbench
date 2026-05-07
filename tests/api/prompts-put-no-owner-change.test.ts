@@ -99,7 +99,15 @@ describe("PUT /api/prompts — owner protection", () => {
   it("when valid PUT (no created_by) is made, the update payload sent to supabase does NOT include created_by (defense-in-depth)", async () => {
     let capturedUpdatePayload: Record<string, unknown> | undefined;
 
-    const singleMock = vi.fn().mockResolvedValue({
+    // Pre-fetch (1st mockFrom call) — handler reads is_draft + created_by
+    const fetchSingle = vi
+      .fn()
+      .mockResolvedValue({ data: { is_draft: false, created_by: "alice" }, error: null });
+    const fetchEq = vi.fn().mockReturnValue({ single: fetchSingle });
+    const fetchSelect = vi.fn().mockReturnValue({ eq: fetchEq });
+
+    // Update (2nd mockFrom call)
+    const updSingle = vi.fn().mockResolvedValue({
       data: {
         id: "abc",
         title: "新标题",
@@ -111,13 +119,17 @@ describe("PUT /api/prompts — owner protection", () => {
       },
       error: null,
     });
-    const selectMock = vi.fn().mockReturnValue({ single: singleMock });
-    const eqMock = vi.fn().mockReturnValue({ select: selectMock });
-    const updateMock = vi.fn().mockImplementation((payload) => {
+    const updSelect = vi.fn().mockReturnValue({ single: updSingle });
+    const updEq = vi.fn().mockReturnValue({ select: updSelect });
+    const updateFn = vi.fn().mockImplementation((payload) => {
       capturedUpdatePayload = payload;
-      return { eq: eqMock };
+      return { eq: updEq };
     });
-    mockFrom.mockReturnValue({ update: updateMock });
+
+    let n = 0;
+    mockFrom.mockImplementation(() =>
+      ++n === 1 ? { select: fetchSelect } : { update: updateFn }
+    );
 
     const req = makeReq({
       method: "PUT",

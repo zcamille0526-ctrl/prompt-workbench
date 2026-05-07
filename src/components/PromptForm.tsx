@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { CATEGORIES } from "../lib/constants";
 import { PromptCreateSchema, PromptUpdateSchema } from "../lib/schemas";
 import { PROMPT_TEMPLATE } from "../lib/templates";
+import { getUserName } from "../lib/userName";
 import type {
   Prompt,
   PromptCreateInput,
@@ -31,7 +32,7 @@ export function PromptForm({
   const [category, setCategory] = useState(initial?.category || "");
   const [tagsInput, setTagsInput] = useState(initial?.tags.join(", ") || "");
   const [variables, setVariables] = useState<Variable[]>(initial?.variables || []);
-  const [createdBy, setCreatedBy] = useState(initial?.created_by || "");
+  const [isDraft, setIsDraft] = useState(initial?.is_draft ?? false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -69,6 +70,7 @@ export function PromptForm({
           category,
           tags,
           variables: cleanedVariables,
+          is_draft: isDraft,
         });
         if (!parsed.success) {
           setError(parsed.error.issues[0].message);
@@ -77,13 +79,20 @@ export function PromptForm({
         }
         await onUpdate(parsed.data);
       } else {
+        const userName = getUserName();
+        if (!userName) {
+          setError("请先在设置中填写名字");
+          setIsSubmitting(false);
+          return;
+        }
         const parsed = PromptCreateSchema.safeParse({
           title,
           content,
           category,
           tags,
           variables: cleanedVariables,
-          created_by: createdBy,
+          created_by: userName,
+          is_draft: isDraft,
         });
         if (!parsed.success) {
           setError(parsed.error.issues[0].message);
@@ -212,17 +221,20 @@ export function PromptForm({
               ))}
             </div>
 
-            {!isEdit && (
-              <div>
-                <label className="text-sm font-medium text-text-primary">创建人</label>
-                <input
-                  type="text"
-                  value={createdBy}
-                  onChange={(e) => setCreatedBy(e.target.value)}
-                  className="input-field mt-1"
-                />
-              </div>
-            )}
+            <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isDraft}
+                onChange={(e) => setIsDraft(e.target.checked)}
+                className="w-4 h-4 accent-primary"
+              />
+              <span>
+                保存为草稿
+                <span className="text-xs text-text-primary/60 ml-1">
+                  （只有你能看到，可以在编辑时切换为已发布）
+                </span>
+              </span>
+            </label>
 
             {error && <p className="text-error text-sm">{error}</p>}
 

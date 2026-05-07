@@ -59,6 +59,11 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
             <h2 className="text-xl font-medium text-primary">
               {prompt.title}
             </h2>
+            {prompt.is_draft && (
+              <span className="text-xs bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 whitespace-nowrap">
+                📝 草稿
+              </span>
+            )}
             <span className="category-chip">
               {prompt.category}
             </span>

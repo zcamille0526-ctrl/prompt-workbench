@@ -20,6 +20,7 @@ const promptCommonShape = {
   category: z.string().min(1, "请选择分类"),
   tags: z.array(z.string()),
   variables: z.array(VariableSchema),
+  is_draft: z.boolean().default(false),
 };
 
 // POST schema: includes created_by (the new owner is the current user's name)
@@ -57,4 +58,5 @@ export interface Prompt {
   created_at: string;
   updated_at: string;
   use_count: number;
+  is_draft: boolean;
 }

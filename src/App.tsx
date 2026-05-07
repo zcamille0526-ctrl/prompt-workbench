@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useAuth } from "./hooks/useAuth";
 import { usePrompts } from "./hooks/usePrompts";
 import { usePromptsPolling } from "./hooks/usePromptsPolling";
@@ -9,6 +9,9 @@ import { PromptList } from "./components/PromptList";
 import { PromptDetail } from "./components/PromptDetail";
 import { PromptForm } from "./components/PromptForm";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { UserNameDialog } from "./components/UserNameDialog";
+import { SettingsDialog } from "./components/SettingsDialog";
+import { getUserName, setUserName } from "./lib/userName";
 import type {
   Prompt,
   PromptCreateInput,
@@ -34,6 +37,8 @@ function AuthenticatedApp() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<Prompt | undefined>();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [nameDialogOpen, setNameDialogOpen] = useState(() => !getUserName());
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const filteredPrompts = useMemo(() => {
     let result = prompts;
@@ -99,6 +104,25 @@ function AuthenticatedApp() {
     }
   };
 
+  const handleNameSubmit = (name: string) => {
+    setUserName(name);
+    setNameDialogOpen(false);
+    fetchPrompts();
+  };
+
+  const handleNameChanged = useCallback(() => {
+    // When the user renames themselves, their visible draft set changes —
+    // refetch so the list reflects the new identity immediately.
+    setSelectedPrompt(null);
+    fetchPrompts();
+  }, [fetchPrompts]);
+
+  // If the viewer shifted (e.g. tab restored from backgrounded state after
+  // name cleared), guard: keep forcing the name dialog.
+  useEffect(() => {
+    if (!getUserName()) setNameDialogOpen(true);
+  }, []);
+
   if (isLoading) {
     return (
       <div className="h-screen flex items-center justify-center text-text-primary">
@@ -121,6 +145,7 @@ function AuthenticatedApp() {
             onSearchChange={setSearchQuery}
             onExport={handleExport}
             onNewPrompt={handleNewPrompt}
+            onOpenSettings={() => setSettingsOpen(true)}
             selectedTag={selectedTag}
             onClearTag={() => setSelectedTag(null)}
           />
@@ -164,6 +189,15 @@ function AuthenticatedApp() {
         title="删除提示词"
         description={`确定要删除「${selectedPrompt?.title}」吗？此操作不可撤销。`}
         onConfirm={handleDeleteConfirm}
+      />
+
+      <UserNameDialog open={nameDialogOpen} onSubmit={handleNameSubmit} />
+
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        prompts={prompts}
+        onNameChange={handleNameChanged}
       />
     </>
   );

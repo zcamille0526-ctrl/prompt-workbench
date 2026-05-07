@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "../lib/api";
+import { getUserName } from "../lib/userName";
 import type {
   Prompt,
   PromptCreateInput,
@@ -13,7 +14,11 @@ export function usePrompts() {
 
   const fetchPrompts = useCallback(async () => {
     try {
-      const data = await api.request<Prompt[]>("/api/prompts");
+      const viewer = getUserName();
+      const query = viewer
+        ? `/api/prompts?viewer=${encodeURIComponent(viewer)}`
+        : "/api/prompts";
+      const data = await api.request<Prompt[]>(query);
       setPrompts(data);
       setError(null);
     } catch (e) {
@@ -38,7 +43,9 @@ export function usePrompts() {
 
   const updatePrompt = useCallback(
     async (id: string, input: PromptUpdateInput) => {
-      const data = await api.request<Prompt>(`/api/prompts?id=${id}`, {
+      const viewer = getUserName();
+      const qs = viewer ? `?id=${id}&viewer=${encodeURIComponent(viewer)}` : `?id=${id}`;
+      const data = await api.request<Prompt>(`/api/prompts${qs}`, {
         method: "PUT",
         body: JSON.stringify(input),
       });
@@ -49,7 +56,9 @@ export function usePrompts() {
   );
 
   const deletePrompt = useCallback(async (id: string) => {
-    await api.request(`/api/prompts?id=${id}`, { method: "DELETE" });
+    const viewer = getUserName();
+    const qs = viewer ? `?id=${id}&viewer=${encodeURIComponent(viewer)}` : `?id=${id}`;
+    await api.request(`/api/prompts${qs}`, { method: "DELETE" });
     setPrompts((prev) => prev.filter((p) => p.id !== id));
   }, []);
 

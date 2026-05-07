@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 import { verifyToken } from "./verify.js";
 import { PromptCreateSchema, PromptUpdateSchema } from "../src/lib/schemas.js";
+import { isValidUserName } from "../src/lib/userName.shared.js";
 import { safeLog } from "./lib/log.js";
 
 const supabase = createClient(
@@ -9,10 +10,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// Field allowlists are defense-in-depth. Strict Zod schema is the primary
-// gate (any unknown field returns 400). Allowlists guarantee that even if a
-// future schema regression lets unknown fields through, only these columns
-// are sent to Postgres.
 const POST_ALLOWED_FIELDS = [
   "title",
   "content",
@@ -20,6 +17,7 @@ const POST_ALLOWED_FIELDS = [
   "tags",
   "variables",
   "created_by",
+  "is_draft",
 ] as const;
 
 const PUT_ALLOWED_FIELDS = [
@@ -28,6 +26,7 @@ const PUT_ALLOWED_FIELDS = [
   "category",
   "tags",
   "variables",
+  "is_draft",
 ] as const;
 
 function pickFields<T extends object>(
@@ -61,28 +60,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const id = req.query.id as string | undefined;
+  const viewer = (req.query.viewer as string | undefined) ?? "";
 
   if (req.method === "GET") {
-    const { data, error } = await supabase
+    if (viewer && !isValidUserName(viewer)) {
+      safeLog({ endpoint: "/api/prompts", method: "GET", status: 400, errorCode: "INVALID_VIEWER" });
+      return res.status(400).json({ error: "Invalid viewer" });
+    }
+
+    const publishedQ = supabase
       .from("prompts")
       .select("*")
+      .eq("is_draft", false)
       .order("created_at", { ascending: false });
-    if (error) {
-      safeLog({
-        endpoint: "/api/prompts",
-        method: "GET",
-        status: 500,
-        errorCode: "SUPABASE_SELECT",
-      });
-      return res.status(500).json({ error: error.message });
+
+    const draftQ = viewer
+      ? supabase
+          .from("prompts")
+          .select("*")
+          .eq("is_draft", true)
+          .eq("created_by", viewer)
+          .order("created_at", { ascending: false })
+      : null;
+
+    const [pub, drafts] = await Promise.all([
+      publishedQ,
+      draftQ ?? Promise.resolve({ data: [] as unknown[], error: null }),
+    ]);
+
+    if (pub.error || drafts.error) {
+      safeLog({ endpoint: "/api/prompts", method: "GET", status: 500, errorCode: "SUPABASE_SELECT" });
+      return res.status(500).json({ error: (pub.error || drafts.error)!.message });
     }
-    safeLog({
-      endpoint: "/api/prompts",
-      method: "GET",
-      status: 200,
-      durationMs: Date.now() - startedAt,
-    });
-    return res.status(200).json(data);
+
+    const merged = [...(pub.data ?? []), ...(drafts.data ?? [])]
+      .sort((a: any, b: any) => b.created_at.localeCompare(a.created_at));
+
+    safeLog({ endpoint: "/api/prompts", method: "GET", status: 200, durationMs: Date.now() - startedAt });
+    return res.status(200).json(merged);
   }
 
   if (req.method === "POST") {
@@ -91,12 +106,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const issues = parsed.error.issues.map(
         (i) => `${i.path.join(".") || "(root)"}: ${i.message}`
       );
-      safeLog({
-        endpoint: "/api/prompts",
-        method: "POST",
-        status: 400,
-        errorCode: "ZOD",
-      });
+      safeLog({ endpoint: "/api/prompts", method: "POST", status: 400, errorCode: "ZOD" });
       return badRequest(res, issues);
     }
     const insertData = pickFields(parsed.data, POST_ALLOWED_FIELDS);
@@ -106,20 +116,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .select()
       .single();
     if (error) {
-      safeLog({
-        endpoint: "/api/prompts",
-        method: "POST",
-        status: 500,
-        errorCode: "SUPABASE_INSERT",
-      });
+      safeLog({ endpoint: "/api/prompts", method: "POST", status: 500, errorCode: "SUPABASE_INSERT" });
       return res.status(500).json({ error: error.message });
     }
-    safeLog({
-      endpoint: "/api/prompts",
-      method: "POST",
-      status: 201,
-      durationMs: Date.now() - startedAt,
-    });
+    safeLog({ endpoint: "/api/prompts", method: "POST", status: 201, durationMs: Date.now() - startedAt });
     return res.status(201).json(data);
   }
 
@@ -129,14 +129,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const issues = parsed.error.issues.map(
         (i) => `${i.path.join(".") || "(root)"}: ${i.message}`
       );
-      safeLog({
-        endpoint: "/api/prompts",
-        method: "PUT",
-        status: 400,
-        errorCode: "ZOD",
-      });
+      safeLog({ endpoint: "/api/prompts", method: "PUT", status: 400, errorCode: "ZOD" });
       return badRequest(res, issues);
     }
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from("prompts")
+      .select("is_draft, created_by")
+      .eq("id", id)
+      .single();
+
+    if (fetchErr || !existing) {
+      safeLog({ endpoint: "/api/prompts", method: "PUT", status: 404, errorCode: "NOT_FOUND" });
+      return res.status(404).json({ error: "Prompt not found" });
+    }
+
+    if (existing.is_draft) {
+      if (!viewer || viewer !== existing.created_by) {
+        safeLog({ endpoint: "/api/prompts", method: "PUT", status: 403, errorCode: "DRAFT_OWNER" });
+        return res.status(403).json({ error: "Only the draft owner can edit this prompt" });
+      }
+    }
+
     const updateData = pickFields(parsed.data, PUT_ALLOWED_FIELDS);
     const { data, error } = await supabase
       .from("prompts")
@@ -145,40 +159,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .select()
       .single();
     if (error) {
-      safeLog({
-        endpoint: "/api/prompts",
-        method: "PUT",
-        status: 500,
-        errorCode: "SUPABASE_UPDATE",
-      });
+      safeLog({ endpoint: "/api/prompts", method: "PUT", status: 500, errorCode: "SUPABASE_UPDATE" });
       return res.status(500).json({ error: error.message });
     }
-    safeLog({
-      endpoint: "/api/prompts",
-      method: "PUT",
-      status: 200,
-      durationMs: Date.now() - startedAt,
-    });
+    safeLog({ endpoint: "/api/prompts", method: "PUT", status: 200, durationMs: Date.now() - startedAt });
     return res.status(200).json(data);
   }
 
   if (req.method === "DELETE" && id) {
+    const { data: existing, error: fetchErr } = await supabase
+      .from("prompts")
+      .select("is_draft, created_by")
+      .eq("id", id)
+      .single();
+
+    if (fetchErr || !existing) {
+      safeLog({ endpoint: "/api/prompts", method: "DELETE", status: 404, errorCode: "NOT_FOUND" });
+      return res.status(404).json({ error: "Prompt not found" });
+    }
+
+    if (existing.is_draft) {
+      if (!viewer || viewer !== existing.created_by) {
+        safeLog({ endpoint: "/api/prompts", method: "DELETE", status: 403, errorCode: "DRAFT_OWNER" });
+        return res.status(403).json({ error: "Only the draft owner can delete this prompt" });
+      }
+    }
+
     const { error } = await supabase.from("prompts").delete().eq("id", id);
     if (error) {
-      safeLog({
-        endpoint: "/api/prompts",
-        method: "DELETE",
-        status: 500,
-        errorCode: "SUPABASE_DELETE",
-      });
+      safeLog({ endpoint: "/api/prompts", method: "DELETE", status: 500, errorCode: "SUPABASE_DELETE" });
       return res.status(500).json({ error: error.message });
     }
-    safeLog({
-      endpoint: "/api/prompts",
-      method: "DELETE",
-      status: 200,
-      durationMs: Date.now() - startedAt,
-    });
+    safeLog({ endpoint: "/api/prompts", method: "DELETE", status: 200, durationMs: Date.now() - startedAt });
     return res.status(200).json({ success: true });
   }
 
