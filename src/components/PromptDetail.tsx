@@ -67,49 +67,49 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish }: Prop
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-medium text-primary">
+      <div className="flex items-start justify-between mb-4 gap-4">
+        <div className="min-w-0 flex-1">
+          {/* Title row: identity + state badge only */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-xl font-semibold text-primary">
               {prompt.title}
             </h2>
             {prompt.is_draft && (
-              <span className="text-xs bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 whitespace-nowrap">
+              <span className="text-xs font-medium bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 whitespace-nowrap">
                 📝 草稿
               </span>
             )}
-            {prompt.is_draft && isOwner && (
-              <button
-                onClick={handleTogglePublish}
-                disabled={isToggling}
-                className="text-xs font-medium bg-primary text-white rounded-full px-3 py-0.5 hover:bg-gray-800 disabled:opacity-50"
-              >
-                {isToggling ? "发布中..." : "发布"}
-              </button>
-            )}
-            <span className="category-chip">
-              {prompt.category}
-            </span>
           </div>
-          {prompt.tags.length > 0 && (
-            <div className="flex gap-1 mt-2">
-              {prompt.tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="tag-chip"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
+          {/* Meta row: category and tags share visual weight */}
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <span className="category-chip-soft">{prompt.category}</span>
+            {prompt.tags.length > 0 && (
+              <>
+                <span className="text-gray-300 text-xs">·</span>
+                {prompt.tags.map((tag) => (
+                  <span key={tag} className="tag-chip">
+                    {tag}
+                  </span>
+                ))}
+              </>
+            )}
+          </div>
         </div>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center shrink-0">
+          {prompt.is_draft && isOwner && (
+            <button
+              onClick={handleTogglePublish}
+              disabled={isToggling}
+              className="btn-pill bg-secondary text-primary hover:bg-orange-200 focus-visible:ring-secondary/50 disabled:opacity-50"
+            >
+              {isToggling ? "发布中..." : "发布"}
+            </button>
+          )}
           {!prompt.is_draft && isOwner && (
             <button
               onClick={handleTogglePublish}
               disabled={isToggling}
-              className="text-xs text-text-primary/70 hover:text-primary underline-offset-2 hover:underline disabled:opacity-50"
+              className="text-xs text-text-primary/70 hover:text-primary underline-offset-2 hover:underline disabled:opacity-50 px-2"
               title="只有自己能再次看到"
             >
               {isToggling ? "处理中..." : "转为草稿"}

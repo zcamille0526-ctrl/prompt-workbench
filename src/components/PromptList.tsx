@@ -51,26 +51,27 @@ export function PromptList({ prompts, selectedId, onSelect, onTagClick }: Props)
               <span className="font-medium text-sm text-primary truncate flex-1">
                 {prompt.title}
               </span>
-              <span className="category-chip shrink-0">
-                {prompt.category}
-              </span>
+              {prompt.is_draft && (
+                <span className="text-[10px] font-medium bg-amber-100 text-amber-700 rounded-full px-1.5 py-0.5 whitespace-nowrap shrink-0">
+                  📝 草稿
+                </span>
+              )}
             </div>
-            {prompt.tags.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {prompt.tags.slice(0, 3).map((tag) => (
-                  <span
-                    key={tag}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTagClick(tag);
-                    }}
-                    className="tag-chip-interactive"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            )}
+            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+              <span className="category-chip-soft">{prompt.category}</span>
+              {prompt.tags.slice(0, 3).map((tag) => (
+                <span
+                  key={tag}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onTagClick(tag);
+                  }}
+                  className="tag-chip-interactive"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
             <div className="flex items-end justify-between gap-2 mt-1.5">
               <div className="text-xs text-text-primary truncate flex-1 min-w-0">
                 {prompt.content.length > 60

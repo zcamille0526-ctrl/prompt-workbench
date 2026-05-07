@@ -10,14 +10,25 @@
     line-height: 1.55;
   }
 
-  ::-webkit-scrollbar {
-    width: 6px;
+  /* Apply scrollbar styles globally so list/detail panes match the body. */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
   }
-  ::-webkit-scrollbar-track {
+  *::-webkit-scrollbar-track {
     background: transparent;
   }
-  ::-webkit-scrollbar-thumb {
-    @apply bg-gray-300 rounded-full;
+  *::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.12);
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.22);
+  }
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
   }
 }
 
@@ -54,6 +65,10 @@
 
   .category-chip {
     @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-primary text-white;
+  }
+
+  .category-chip-soft {
+    @apply inline-block text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-700;
   }
 
   .tag-chip {
