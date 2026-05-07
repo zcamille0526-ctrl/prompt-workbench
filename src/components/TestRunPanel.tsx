@@ -55,12 +55,13 @@ export function TestRunPanel({
     [tempContent, originalContent, variableValues]
   );
 
-  const { messages, isLoading, error, sendMessage, clearHistory } = useChat(
+  const { messages, isLoading, error, sendMessage, regenerateLast, deleteAssistantPair, clearHistory } = useChat(
     effectiveSystemPrompt,
     model
   );
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -258,28 +259,41 @@ export function TestRunPanel({
                 输入第一条消息开始对话
               </p>
             )}
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-                    m.role === "user"
-                      ? "bg-primary text-white font-medium"
-                      : "bg-gray-50 border border-gray-200 text-primary"
-                  }`}
-                >
-                  {m.role === "assistant" ? (
-                    <div className="prose prose-sm prose-gray max-w-none prose-p:my-1 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1 prose-p:text-primary prose-li:text-primary prose-strong:text-primary">
-                      <ReactMarkdown>{m.content}</ReactMarkdown>
-                    </div>
-                  ) : (
-                    <span className="whitespace-pre-wrap">{m.content}</span>
-                  )}
+            {messages.map((m, idx) => {
+              const isAssistant = m.role === "assistant";
+              const isLast = idx === messages.length - 1;
+              return (
+                <div key={m.id} className={isAssistant ? "" : "flex justify-end"}>
+                  <div
+                    className={
+                      isAssistant
+                        ? "max-w-[90%]"
+                        : "max-w-[85%] rounded-lg px-3 py-2 text-sm bg-primary text-white font-medium"
+                    }
+                  >
+                    {isAssistant ? (
+                      <>
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-primary">
+                          <div className="prose prose-sm prose-gray max-w-none prose-p:my-1 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1 prose-p:text-primary prose-li:text-primary prose-strong:text-primary">
+                            <ReactMarkdown>{m.content}</ReactMarkdown>
+                          </div>
+                        </div>
+                        <AssistantActions
+                          message={m.content}
+                          isLast={isLast}
+                          isLoading={isLoading}
+                          onRegenerate={() => void regenerateLast()}
+                          onDelete={() => deleteAssistantPair(m.id)}
+                          onAskFollowup={() => inputRef.current?.focus()}
+                        />
+                      </>
+                    ) : (
+                      <span className="whitespace-pre-wrap">{m.content}</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {isLoading && (
               <div className="flex justify-start">
                 <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-primary/60">
@@ -302,6 +316,7 @@ export function TestRunPanel({
 
           <form onSubmit={handleSubmit} className="flex gap-2">
             <input
+              ref={inputRef}
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -332,6 +347,84 @@ export function TestRunPanel({
           setOpen(true);
         }}
       />
+    </div>
+  );
+}
+
+/**
+ * Action strip rendered under each assistant reply. Uses plain text labels
+ * (not icon-only) because icons without text read as decoration to most
+ * users — the whole point is affordance.
+ *
+ * 重新生成 is only offered on the most recent assistant message: regenerating
+ * older replies would strand subsequent turns that were conditioned on them.
+ */
+function AssistantActions({
+  message,
+  isLast,
+  isLoading,
+  onRegenerate,
+  onDelete,
+  onAskFollowup,
+}: {
+  message: string;
+  isLast: boolean;
+  isLoading: boolean;
+  onRegenerate: () => void;
+  onDelete: () => void;
+  onAskFollowup: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = message;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const actionClass =
+    "text-xs text-primary/60 hover:text-primary hover:bg-white/60 rounded-full px-2 py-0.5 transition-colors";
+
+  return (
+    <div className="flex items-center gap-1 mt-1 pl-1">
+      <button type="button" onClick={handleCopy} className={actionClass}>
+        {copied ? "已复制" : "复制"}
+      </button>
+      {isLast && (
+        <button
+          type="button"
+          onClick={onRegenerate}
+          disabled={isLoading}
+          className={`${actionClass} disabled:opacity-40`}
+        >
+          重新生成
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onAskFollowup}
+        disabled={isLoading}
+        className={`${actionClass} disabled:opacity-40`}
+      >
+        追问
+      </button>
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={isLoading}
+        className={`${actionClass} hover:text-error disabled:opacity-40`}
+      >
+        删除
+      </button>
     </div>
   );
 }

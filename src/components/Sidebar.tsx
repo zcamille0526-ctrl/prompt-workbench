@@ -73,11 +73,11 @@ export function Sidebar({
           <h2 className="text-lg font-medium text-white">提示词工作台</h2>
           <button
             onClick={() => setCollapsed(true)}
-            className="text-white/60 hover:text-white text-sm w-7 h-7 rounded-full hover:bg-white/10 flex items-center justify-center"
+            className="text-white/90 hover:text-white text-sm font-semibold w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center shrink-0"
             title="收起侧边栏"
             aria-label="收起侧边栏"
           >
-            ‹
+            «
           </button>
         </div>
         <label className="sr-only" htmlFor="search-input">搜索</label>
