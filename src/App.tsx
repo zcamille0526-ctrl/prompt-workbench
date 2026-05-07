@@ -104,6 +104,19 @@ function AuthenticatedApp() {
     }
   };
 
+  const handleTogglePublish = async (next: boolean) => {
+    if (!selectedPrompt) return;
+    const updated = await updatePrompt(selectedPrompt.id, {
+      title: selectedPrompt.title,
+      content: selectedPrompt.content,
+      category: selectedPrompt.category,
+      tags: selectedPrompt.tags,
+      variables: selectedPrompt.variables,
+      is_draft: next,
+    });
+    setSelectedPrompt(updated);
+  };
+
   const handleNameSubmit = (name: string) => {
     setUserName(name);
     setNameDialogOpen(false);
@@ -165,6 +178,7 @@ function AuthenticatedApp() {
               prompt={selectedPrompt}
               onEdit={handleEdit}
               onDelete={() => setDeleteOpen(true)}
+              onTogglePublish={handleTogglePublish}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-text-primary text-sm">

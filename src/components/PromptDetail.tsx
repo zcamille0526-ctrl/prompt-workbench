@@ -3,14 +3,16 @@ import ReactMarkdown from "react-markdown";
 import type { Prompt } from "../lib/schemas";
 import { extractVariables, substituteVariables } from "../lib/variables";
 import { api } from "../lib/api";
+import { getUserName } from "../lib/userName";
 
 interface Props {
   prompt: Prompt;
   onEdit: () => void;
   onDelete: () => void;
+  onTogglePublish: (next: boolean) => Promise<void>;
 }
 
-export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
+export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish }: Props) {
   const variables = useMemo(
     () => extractVariables(prompt.content),
     [prompt.content]
@@ -23,6 +25,7 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
     return init;
   });
   const [copied, setCopied] = useState(false);
+  const [isToggling, setIsToggling] = useState(false);
   // optimistic local count: bumped on copy, reset to server value when the
   // selected prompt changes (parent passes a new prompt object via key prop)
   const [localCount, setLocalCount] = useState(prompt.use_count);
@@ -31,6 +34,17 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
     () => substituteVariables(prompt.content, values),
     [prompt.content, values]
   );
+
+  const isOwner = prompt.created_by === getUserName();
+
+  const handleTogglePublish = async () => {
+    setIsToggling(true);
+    try {
+      await onTogglePublish(!prompt.is_draft);
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
   const handleCopy = async () => {
     try {
@@ -64,6 +78,15 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
                 📝 草稿
               </span>
             )}
+            {prompt.is_draft && isOwner && (
+              <button
+                onClick={handleTogglePublish}
+                disabled={isToggling}
+                className="text-xs font-medium bg-primary text-white rounded-full px-3 py-0.5 hover:bg-gray-800 disabled:opacity-50"
+              >
+                {isToggling ? "发布中..." : "发布"}
+              </button>
+            )}
             <span className="category-chip">
               {prompt.category}
             </span>
@@ -81,7 +104,17 @@ export function PromptDetail({ prompt, onEdit, onDelete }: Props) {
             </div>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {!prompt.is_draft && isOwner && (
+            <button
+              onClick={handleTogglePublish}
+              disabled={isToggling}
+              className="text-xs text-text-primary/70 hover:text-primary underline-offset-2 hover:underline disabled:opacity-50"
+              title="只有自己能再次看到"
+            >
+              {isToggling ? "处理中..." : "转为草稿"}
+            </button>
+          )}
           <button
             onClick={onEdit}
             className="btn-secondary"

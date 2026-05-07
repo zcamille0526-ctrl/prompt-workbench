@@ -12,7 +12,9 @@ const config: Config = {
         surface: "#FFFFFF",
         accent: "#111827",
         error: "#DC2626",
-        "text-primary": "#6B7280",
+        // Bumped from #6B7280 (gray-500) to #374151 (gray-700) so body copy
+        // is darker and easier to read; headings still use `primary` (#111827).
+        "text-primary": "#374151",
         "text-secondary": "#FFFFFF",
       },
       fontFamily: {
