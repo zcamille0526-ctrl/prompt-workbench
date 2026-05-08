@@ -1,6 +1,6 @@
 # Phase 2: 完整用户体系 — 设计规格文档
 
-> **审核轮次**：本 spec 经过 codex 第 1 轮审核（2026-05-07），针对 P0/P1/P2 共 8 处反馈做了修订。修订要点见末尾「附录 A：codex 反馈处理记录」。
+> **审核轮次**：本 spec 经过 codex 第 1 轮（2026-05-07）+ 第 2 轮（2026-05-07）审核，修订记录见末尾「附录 A / B」。第 2 轮主要处理 invite 两段式流的半成功状态、URL fragment 清理、资源补偿等 7 项。
 
 ## 0. 决策汇总（实施前已锁定）
 
@@ -131,8 +131,14 @@ POST /api/auth/signup
     │  })
     │     ↑ Supabase 创建 unconfirmed 用户 + 发送邀请邮件
     │
-    └─ 在新建的 auth.users 上写入 app_metadata.team_pass_verified=true
-       通过 admin.updateUserById（service_role 唯一可写 app_metadata 的角色）
+    ├─ 立即调 admin.updateUserById(newUser.id, {
+    │     app_metadata: { team_pass_verified: true }
+    │  })
+    │
+    └─ ⚠️ 原子性补偿（P2 修复）：若 updateUserById 抛错，同步调
+       admin.deleteUser(newUser.id) 回滚刚创建的 auth.users 行，再返回 500
+       INVITE_FAILED。否则会留下一个"被邀请但永远过不了 setup-account
+       team_pass_verified 检查"的孤儿账号
     │
     ▼
 返回 200 { message: "请到邮箱点击邀请链接以完成注册" }
@@ -145,7 +151,11 @@ POST /api/auth/signup
 然后用 @supabase/supabase-js 客户端 setSession({access_token, refresh_token}) 接管会话
     │
     ▼
-判断 user 是否还没设密码（user_metadata.password_set 不存在）→ 跳转「设置密码」表单
+解析完 fragment 立即 history.replaceState({}, '', '/auth/callback') 清空地址栏 token
+（无论后续成功失败，避免 token 留在浏览器历史/截图，详见 §4.4.1）
+    │
+    ▼
+判断 user 是否还没设密码（user_metadata.password_set !== true）→ 跳转「设置密码」表单
     │
     ▼
 用户填新密码并提交 → POST /api/auth/setup-account
@@ -154,21 +164,34 @@ POST /api/auth/signup
     │
     ├─ 校验该 user 的 app_metadata.team_pass_verified===true（防止有人直接拿到 invite 链接绕过）
     │
-    ├─ 调 admin.updateUserById(user_id, {
-    │     password: <new>,
-    │     user_metadata: { ...existing, password_set: true },
-    │  })
+    ├─ ⚠️ 顺序很重要（P1 修复）：先 UPSERT profile，再设密码
     │
-    └─ INSERT profile 行（display_name 取自 user_metadata，is_admin 由 ADMIN_EMAILS 决定）
-       使用 INSERT ... ON CONFLICT (id) DO NOTHING 确保幂等
+    │   1) UPSERT profile（display_name 取自 user_metadata，is_admin 由 ADMIN_EMAILS 决定）
+    │      INSERT INTO profiles (id, email, display_name, is_admin)
+    │      VALUES (...) ON CONFLICT (id) DO NOTHING
+    │
+    │   2) 仅在 user.user_metadata.password_set !== true 时才设密码：
+    │      admin.updateUserById(user.id, {
+    │        password: <new>,
+    │        user_metadata: { ...existing, password_set: true }
+    │      })
+    │
+    │   反过来（先设密码再 INSERT profile）会有半成功窗口：updateUserById 成功
+    │   但 INSERT profile 失败时，password_set=true 已落库；下次该用户登录后业务
+    │   接口的 authenticate() 因 profile 缺失返回 401，且 setup-account 又会被
+    │   "password_set 已存在"挡住 → 死锁。先 UPSERT profile 让流程天然幂等可重试
+    │
+    └─ 返回 200 { user_summary }
     │
     ▼
-返回 200 → 前端 setSession，跳主界面
+前端跳主界面
 ```
+
+**幂等恢复**：setup-account 的逻辑显式允许"profile 缺失但 password_set=true"作为可恢复状态——此时跳过密码设置，仅 UPSERT profile。这种状态在正常流程下不该出现，仅作为旧 bug / 数据修复的安全网。
 
 **为什么需要"两段式"**：`admin.inviteUserByEmail` API 不接收 password 参数（这是 Supabase 的设计——邀请的语义就是"待用户接受"）。所以密码必须在用户点击邀请链接确认身份后再设置。
 
-**`team_pass_verified` flag 的作用**：是 P0#2 的纵深防御。即便 Supabase 控制台被误改、public signups 又被打开了，也只有走过 `/api/auth/signup` 的用户才会带这个 service_role 写入的 flag；`/api/auth/setup-account` 拒绝没有此 flag 的账户。
+**`team_pass_verified` flag 的边界**：service_role 在 signup 时写入此 flag，service_role 在 setup-account 时检查。Phase 2 的边界明确为：**绕过路径产生的账号永远拿不到 profile，因此永远过不了业务 `authenticate()`**（authenticate 强制要求 profile 存在）。`team_pass_verified` 不在每次业务请求中重复检查；profile 的存在性是单一可信源（详见 §5.2 的修订）。
 
 ### 4.2 登录
 
@@ -222,6 +245,25 @@ Supabase 的 invite/recovery 链接根据项目配置可能返回两种回调：
 
 `AuthCallback` 组件**必须同时支持 fragment token 解析**，并对 `?code` 形态返回错误"链接格式不识别，请重发邀请"，避免在 Supabase 默认变更后悄悄崩溃。
 
+### 4.4.1 立即清空 URL fragment（P1 修复）
+
+implicit flow 把 `access_token` / `refresh_token` 直接放进 URL fragment。fragment 不会随 HTTP 请求发到服务器，但仍然可见于：
+
+- 浏览器地址栏
+- 浏览器历史记录
+- 用户截图、屏幕共享、错误报告
+- 同页内的任何脚本（包括第三方分析、扩展等）
+
+**强制要求**：AuthCallback 在解析完 fragment 取出 token 后，**无论后续 setSession 成功或失败，第一时间**调用：
+
+```ts
+window.history.replaceState({}, "", window.location.pathname);
+```
+
+清空地址栏的 token。setSession 即便失败也不要把 token 留在 URL（用户截图发反馈时的隐患）。
+
+理论上更彻底的方案是切到 PKCE flow（token 不会出现在 fragment），但 PKCE 在 Supabase 邀请邮件流程中的实现路径目前仍在演进，第一版选择"implicit + 立即 replaceState"作为实用平衡。第二版若 PKCE 与 magic-link 流程在 Supabase 侧成熟，再切。
+
 ### 4.5 token 刷新
 
 `access_token` 默认 1 小时。前端被动刷新策略：
@@ -243,34 +285,44 @@ Supabase 的 invite/recovery 链接根据项目配置可能返回两种回调：
 错误场景里"邮箱未验证"会展示"重新发送验证邮件"按钮，需要后端端点支撑：
 
 **`POST /api/auth/resend-invite`**：
-- 接收 `{ email, team_password }`
-- 校验 team_password（防止变成开放的邮件喷射器）
-- 校验该 email 在 auth.users 已存在但未验证
-- 调 `admin.inviteUserByEmail(email, { data: { display_name } })` 重新发邀请
+- 接收 `{ email, team_password }`（**不接收 display_name**——见下文）
+- 校验 `team_password`（防止变成开放的邮件喷射器）
+- 用 service_role 查 `auth.admin.listUsers` 找出该 email 对应用户：
+  - 不存在 → 400 `EMAIL_NOT_FOUND`，提示用户先注册
+  - **`user_metadata.password_set === true` → 400 `ALREADY_SETUP`**：账户已完成设置，应直接登录
+  - 否则继续
+- `display_name` 从已存在的 `user_metadata.display_name` 取，**不接受客户端传入**（避免被人冒名顶替改成"老板"再发邮件）
+- 调 `admin.inviteUserByEmail(email, { data: { display_name }, redirectTo: ${SITE_URL}/auth/callback })`
+- **重新覆写** `app_metadata.team_pass_verified=true`（如果之前 signup 在 flag 写入前崩溃留下了脏数据，这步顺手修复）
 - 返回 200
 
-如果不希望承担额外的实现成本，可以从 UI 删除该按钮，但需在错误场景表里相应说明"用户需联系管理员重发邀请"。**第一版选择实现该端点**。
+**为什么不允许已 setup 用户 resend**：邀请邮件包含一个有效的 access_token，如果对已设密码的账户发送，相当于绕过密码登录的"魔法链接"。这扩大了攻击面，且无业务必要——已 setup 用户应走密码登录，密码忘了走"忘记密码"流程（第二版做）。
 
 ## 5. 后端 API 改造
 
 ### 5.1 新增端点
 
 **`api/auth/signup.ts`**
-- POST `{ email, password?: never, display_name, team_password }`（password 不在此处）
+- POST `{ email, display_name, team_password }`（password 不在此处）
 - Zod strict 校验
 - timingSafeEqual 比较 team_password 与 `SHARED_PASSWORD`
 - `admin.inviteUserByEmail(email, { data: { display_name }, redirectTo: ${SITE_URL}/auth/callback })`
-- `admin.updateUserById(newUser.id, { app_metadata: { team_pass_verified: true } })`
+- 立即 `admin.updateUserById(newUser.id, { app_metadata: { team_pass_verified: true } })`
+- **若 updateUserById 失败：调 `admin.deleteUser(newUser.id)` 回滚，返回 500 `INVITE_FAILED`**（避免留下"被邀请但永远 setup 不通"的孤儿账号）
 - 返回 200 `{ message }` 或 400/409 错误码
 
-**`api/auth/setup-account.ts`**（替代原 spec 的 finalize）
+**`api/auth/setup-account.ts`**（替代原 spec 的 finalize；P1 修复后顺序敏感）
 - POST `{ password }`，需要 `Authorization: Bearer <invite-access-token>`
 - 校验 token，拿 user
-- 校验 `user.app_metadata.team_pass_verified === true`，否则 403
-- 校验 user.user_metadata.password_set 不存在（防重复调用）
-- `admin.updateUserById(user.id, { password, user_metadata: { ...existing, password_set: true } })`
-- INSERT profile 行：`{ id, email, display_name, is_admin: ADMIN_EMAILS.includes(email) }`，`ON CONFLICT (id) DO NOTHING`
+- 校验 `user.app_metadata.team_pass_verified === true`，否则 403 `BYPASS_ATTEMPT`
+- **顺序固定**（防半成功状态死锁）：
+  1. UPSERT profile：`INSERT INTO profiles (id, email, display_name, is_admin) VALUES (...) ON CONFLICT (id) DO NOTHING`
+     - `display_name` 从 `user.user_metadata.display_name` 取
+     - `is_admin = ADMIN_EMAILS.includes(email)`
+  2. 仅当 `user.user_metadata.password_set !== true` 时，才调
+     `admin.updateUserById(user.id, { password, user_metadata: { ...existing, password_set: true } })`
 - 返回 200 `{ user_summary }`
+- **幂等性**：若用户因任何原因已有 `password_set=true` 但缺 profile，第 1 步补齐 profile，第 2 步跳过；后续 login 即可正常使用
 
 **`api/auth/login.ts`**
 - POST `{ email, password }`
@@ -298,6 +350,8 @@ Supabase 的 invite/recovery 链接根据项目配置可能返回两种回调：
 
 ### 5.2 鉴权中间件（`api/lib/auth.ts`）
 
+**安全边界**（P1 修复）：业务接口的"已认证用户"等价于"profile 存在的用户"。`profiles` 行只能由 `setup-account` 创建，而 `setup-account` 强制要求 `app_metadata.team_pass_verified===true`。因此**绕过路径产生的 auth.users 永远没有 profile，永远过不了下面的 authenticate**。`team_pass_verified` 不在每次业务请求里重复 check，因为 profile 的存在性已经传递了同一个保证。
+
 ```ts
 export async function authenticate(req: VercelRequest):
   Promise<{ user: { id: string; email: string; display_name: string; is_admin: boolean } } | null>
@@ -308,6 +362,9 @@ export async function authenticate(req: VercelRequest):
   const { data, error } = await supabase.auth.getUser(token);
   if (error || !data?.user) return null;
 
+  // profile 缺失即拒绝。这一条是单点决定"该 user 是否是合法团队成员"。
+  // 不再单独 check app_metadata.team_pass_verified —— profile 的存在性已经
+  // 蕴含它（见上方"安全边界"段落）。
   const { data: profile } = await supabase
     .from("profiles")
     .select("display_name, is_admin")
@@ -389,10 +446,13 @@ prompt / example 响应去掉旧的 `created_by`（字符串），新增：
 - "重新发送验证邮件"按钮调 `/api/auth/resend-invite`
 
 **`src/components/AuthCallback.tsx`**：
-- 从 `window.location.hash` 解析 fragment token（也支持 `?code=` 时给出"链接格式不识别"提示）
+- 第一行就解析 `window.location.hash`（fragment token）
+- 解析后**立即** `window.history.replaceState({}, "", window.location.pathname)` 清空地址栏（详见 §4.4.1）
 - 调 `supabase.auth.setSession({access_token, refresh_token})`
-- 检查 `user_metadata.password_set`：若未设过密码 → 渲染设密码表单 → 提交到 `/api/auth/setup-account`
-- 已设过密码 → 直接跳主界面
+- 检查 `user_metadata.password_set`：未设过 → 渲染设密码表单 → 提交到 `/api/auth/setup-account`
+- 已设过 → 直接跳主界面
+- 若 fragment 不存在但 query 存在 `?code=`：渲染"链接格式不识别，请联系管理员重发邀请"
+- 若 fragment 存在但解析失败 / setSession 失败：清空 sessionStorage 并显示错误，依然要先 replaceState 清地址栏
 
 **`src/hooks/useCurrentUser.ts`** — 首屏调 `/api/auth/me` 并在 React context 内分发给所有组件。
 
@@ -563,27 +623,55 @@ profile 测试：
 
 > ⚠️ 实施时必须确认前端代码中**永远不读** `SUPABASE_SERVICE_ROLE_KEY` 或非 `VITE_` 变量；如果 import.meta.env.SUPABASE_X 出现在 src/，构建期就要 fail 一个 grep-based lint。
 
-### 12.3 vercel.json（SPA fallback）
+### 12.3 vercel.json（SPA fallback，P2 修复）
+
+不依赖 path-to-regexp 的负向前瞻——用显式顺序更可靠：先放 `/api/(.*)` 让 serverless 函数走原路，再放 catch-all 把所有非 API 请求 fallback 到 `index.html`：
 
 ```json
 {
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
 ```
 
-### 12.4 安全加固 lint
+第一条是 no-op（让 `/api/*` 显式由 Vercel serverless 处理而非被第二条吞掉）。第二条把 `/auth/callback`、`/login` 这种前端路径都指向 `index.html`，由 React 内部决定渲染什么。
 
-新增 `npm run lint:env` 脚本：
+### 12.4 安全加固 lint（P2 修复，覆盖更全）
+
+`npm run lint:env`：
 
 ```bash
-if grep -rE 'SUPABASE_SERVICE_ROLE_KEY|process\.env\.SHARED_PASSWORD|process\.env\.ADMIN_EMAILS' src/; then
-  echo 'Forbidden server-only env in client code'; exit 1;
+#!/usr/bin/env bash
+set -e
+
+# 1) 禁止前端代码字面量中出现 service_role / shared_password / admin_emails 这类
+#    服务端独有的 env 名（无论怎么访问）
+if grep -rE 'SUPABASE_SERVICE_ROLE_KEY|SHARED_PASSWORD|ADMIN_EMAILS' src/; then
+  echo 'Forbidden: server-only env name appears in client code (src/).'
+  exit 1
+fi
+
+# 2) 禁止前端用任何方式访问非 VITE_ 前缀的 supabase / admin / shared 变量。
+#    覆盖 process.env.X / process.env["X"] / process.env['X'] /
+#         import.meta.env.X 形态。
+if grep -rE '(process\.env|import\.meta\.env)(\.|\[\s*["'\''])(?!VITE_)(SUPABASE|ADMIN|SHARED|SITE_URL)' src/; then
+  echo 'Forbidden: client must read only VITE_-prefixed env (src/).'
+  exit 1
+fi
+
+# 3) 禁止解构形态泄漏：const { SUPABASE_SERVICE_ROLE_KEY } = process.env
+if grep -rE '\{\s*[^}]*\b(SUPABASE_SERVICE_ROLE_KEY|SHARED_PASSWORD|ADMIN_EMAILS)\b[^}]*\}\s*=\s*(process\.env|import\.meta\.env)' src/; then
+  echo 'Forbidden: destructured server-only env in client code.'
+  exit 1
 fi
 ```
 
-加入 CI（继 `lint:logs` 之后），防止 service_role 这类高敏 env 被误注入到前端 bundle。
+接入 `package.json` 的 `lint:env` 脚本，CI 在 `lint:logs` 之后运行。三条规则覆盖：
+- 任何字面量出现服务端独有 env 名 → fail（最强约束，包括字符串注释和 dynamic 访问）
+- 客户端用非 `VITE_` 前缀访问 `process.env` / `import.meta.env` → fail（点访问 + 字符串索引）
+- 解构形态从 env 对象中解出敏感 key → fail
 
 ## 13. 已知风险
 
@@ -618,3 +706,15 @@ fi
 | 6 | P1 | sessionStorage 实现可能漂到 localStorage | §4.3 给出 supabase-js 显式配置 `storage: window.sessionStorage`；§9 测试覆盖 |
 | 7 | P2 | env 命名自相矛盾 | §12.2 重写：前端只 VITE_ 前缀，后端无前缀，互不重叠；§12.4 新增 lint:env 脚本防泄漏 |
 | 8 | P2 | resend-verification UI 没有后端 | §4.7 新增 `/api/auth/resend-invite` 端点；§5.1 列入新增端点 |
+
+## 附录 B：codex 第 2 轮反馈处理记录
+
+| # | 优先级 | 反馈 | 处理 |
+|---|---|---|---|
+| 1 | P1 | setup-account 半成功状态死锁（先设密码再插 profile，第二步失败用户卡死） | §4.1 / §5.1 反转顺序：**先 UPSERT profile，再设密码**；setup-account 显式允许"`password_set=true` 但 profile 缺失"作为可恢复状态（补 profile，跳过密码） |
+| 2 | P1 | team_pass_verified 没纳入业务 authenticate，纵深防御覆盖错位 | §2.3 / §5.2 修订：明确"profile 存在性"是业务认证的单一可信源——绕过路径产生的 auth.users 永远拿不到 profile，因此过不了 authenticate。`team_pass_verified` 仅在 setup-account 检查（不在每次业务请求重复 check），spec 措辞统一 |
+| 3 | P1 | resend-invite 可能重置已 setup 用户 / 接受客户端 display_name | §4.7 加固：拒绝 `password_set===true` 的用户（返回 `ALREADY_SETUP`）；display_name 强制取自现有 `user_metadata`，不接受客户端传入；重发时顺手覆写 `team_pass_verified=true` |
+| 4 | P1 | implicit flow token 留 URL fragment 未要求清理 | §4.4.1 新增小节：AuthCallback 解析完 fragment 必须**立即** `history.replaceState` 清地址栏，无论后续 setSession 成败；§6.2 AuthCallback 设计列入此约束 |
+| 5 | P2 | vercel rewrite 负向前瞻不可靠 | §12.3 改为显式两条规则：先 `/api/(.*)` no-op 让 serverless 函数走原路，再 `/(.*)` catch-all 到 index.html |
+| 6 | P2 | lint:env grep 覆盖不全（漏字符串索引、import.meta.env、解构形态） | §12.4 重写：三条规则——禁止任何字面量出现服务端 env 名；禁止前端访问非 VITE_ 前缀的 SUPABASE/ADMIN/SHARED；禁止解构 process.env / import.meta.env |
+| 7 | P2 | signup 的 invite + flag 写入非原子，第二步失败留孤儿账号 | §4.1 / §5.1 加补偿：updateUserById 抛错时调 `admin.deleteUser` 回滚；resend-invite 路径也会顺手补写 flag，作为第二条恢复路径 |
