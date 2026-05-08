@@ -1,6 +1,6 @@
 # Phase 2: 完整用户体系 — 设计规格文档
 
-> **审核轮次**：本 spec 经过 codex 第 1 轮（2026-05-07）+ 第 2 轮（2026-05-07）审核，修订记录见末尾「附录 A / B」。第 2 轮主要处理 invite 两段式流的半成功状态、URL fragment 清理、资源补偿等 7 项。
+> **审核轮次**：本 spec 经过 codex 第 1/2/3 轮审核（2026-05-07），修订记录见末尾「附录 A / B / C」。Round 3 主要处理 setup-account 反向半成功窗口、同邮箱重复 signup 状态机、resend-invite 限流 + opaque 响应、profile/update strict reject 等 5 项。
 
 ## 0. 决策汇总（实施前已锁定）
 
@@ -176,10 +176,15 @@ POST /api/auth/signup
     │        user_metadata: { ...existing, password_set: true }
     │      })
     │
-    │   反过来（先设密码再 INSERT profile）会有半成功窗口：updateUserById 成功
-    │   但 INSERT profile 失败时，password_set=true 已落库；下次该用户登录后业务
-    │   接口的 authenticate() 因 profile 缺失返回 401，且 setup-account 又会被
-    │   "password_set 已存在"挡住 → 死锁。先 UPSERT profile 让流程天然幂等可重试
+    │   两端都失败时的恢复路径（P1 round-3 修复）：
+    │   - 步骤 1 成功、步骤 2 失败：profile 存在但 password_set=false。
+    │     业务接口的 authenticate 强制要求 password_set===true（详见 §5.2），
+    │     所以这种 user 不会被业务接口当成合法成员。用户重新点邀请链接（或
+    │     走 resend-invite）→ setup-account 再跑：步骤 1 因 ON CONFLICT 跳过，
+    │     步骤 2 重试成功 → 完成。
+    │   - 反过来（先设密码再 UPSERT profile）则会形成"password_set=true 但
+    │     profile 缺失"，且 setup-account 被自身的 password_set 检查挡住 →
+    │     死锁。这正是当前顺序要避免的。
     │
     └─ 返回 200 { user_summary }
     │
@@ -191,7 +196,23 @@ POST /api/auth/signup
 
 **为什么需要"两段式"**：`admin.inviteUserByEmail` API 不接收 password 参数（这是 Supabase 的设计——邀请的语义就是"待用户接受"）。所以密码必须在用户点击邀请链接确认身份后再设置。
 
-**`team_pass_verified` flag 的边界**：service_role 在 signup 时写入此 flag，service_role 在 setup-account 时检查。Phase 2 的边界明确为：**绕过路径产生的账号永远拿不到 profile，因此永远过不了业务 `authenticate()`**（authenticate 强制要求 profile 存在）。`team_pass_verified` 不在每次业务请求中重复检查；profile 的存在性是单一可信源（详见 §5.2 的修订）。
+**`team_pass_verified` flag 的边界**：service_role 在 signup 时写入此 flag，service_role 在 setup-account 时检查。Phase 2 的边界明确为：**绕过路径产生的账号永远拿不到 profile，因此永远过不了业务 `authenticate()`**（authenticate 强制要求 profile 存在 + password_set===true，详见 §5.2 修订）。`team_pass_verified` 不在每次业务请求中重复检查。
+
+### 4.1.1 同邮箱重复 signup 的状态机（P1 round-3 修复）
+
+repeat-signup 在 Supabase 默认行为下会"再次发送邀请"，可能覆盖 user_metadata 或被人滥用。需明确状态机：
+
+| 既有用户状态 | signup 行为 | resend-invite 行为 |
+|---|---|---|
+| 不存在 | 正常流程：invite + 写 flag + 返回 200 | 400 `EMAIL_NOT_FOUND`（响应统一为 §4.7 opaque message） |
+| 存在 / `password_set=false` / `team_pass_verified=true`（被邀请但未设密码，正常中间态） | 400 `EMAIL_PENDING`，前端提示"该邮箱已发出邀请，请去邮箱查收，或点'重发邀请'" | 受冷却时间约束，重发邀请；display_name 取自现有 user_metadata（不接受客户端覆写） |
+| 存在 / `password_set=false` / `team_pass_verified=false`（孤儿账号，signup 第二步崩溃留下） | 400 `EMAIL_PENDING`（向用户呈现与上一行相同），后端日志记 `ORPHAN_DETECTED` 便于排查 | 重发时**顺手覆写 `team_pass_verified=true`**（兼任修复路径），display_name 不变 |
+| 存在 / `password_set=true`（账号已完成设置） | 400 `EMAIL_TAKEN`，前端提示"邮箱已注册，请直接登录" | 400 `ALREADY_SETUP`（响应仍统一为 opaque message，详见 §4.7） |
+
+关键不变量：
+- **signup 永远不重新调用 `inviteUserByEmail`**——避免 display_name 被覆盖、邀请链接被多次签发供攻击者拼凑
+- **display_name 只在首次 signup 时由客户端提供**——后续任何重发路径都从 `user_metadata` 读取
+- 状态判定的源头是 `auth.users` 行（signup 前用 `admin.listUsers({ email })` 查询），不依赖 profiles（profiles 滞后）
 
 ### 4.2 登录
 
@@ -280,23 +301,31 @@ window.history.replaceState({}, "", window.location.pathname);
 - 调 `supabase.auth.admin.signOut(refresh_token)`（service_role 可使任何 token 失效）
 - 前端清 sessionStorage
 
-### 4.7 重发邀请邮件（P2#8 修复）
+### 4.7 重发邀请邮件（P2#8 修复 + round-3 限流加固）
 
 错误场景里"邮箱未验证"会展示"重新发送验证邮件"按钮，需要后端端点支撑：
 
 **`POST /api/auth/resend-invite`**：
 - 接收 `{ email, team_password }`（**不接收 display_name**——见下文）
 - 校验 `team_password`（防止变成开放的邮件喷射器）
-- 用 service_role 查 `auth.admin.listUsers` 找出该 email 对应用户：
-  - 不存在 → 400 `EMAIL_NOT_FOUND`，提示用户先注册
-  - **`user_metadata.password_set === true` → 400 `ALREADY_SETUP`**：账户已完成设置，应直接登录
-  - 否则继续
-- `display_name` 从已存在的 `user_metadata.display_name` 取，**不接受客户端传入**（避免被人冒名顶替改成"老板"再发邮件）
-- 调 `admin.inviteUserByEmail(email, { data: { display_name }, redirectTo: ${SITE_URL}/auth/callback })`
-- **重新覆写** `app_metadata.team_pass_verified=true`（如果之前 signup 在 flag 写入前崩溃留下了脏数据，这步顺手修复）
-- 返回 200
+- **限流**（round-3 加固）：
+  - 每邮箱冷却 60 秒（`auth.users.last_sign_in_at` / 自建 `invite_throttle` 表追踪上次发送时间）
+  - 每 IP 每小时最多 10 次
+  - 第一版用一张 `invite_throttle (email text primary, last_sent_at timestamptz)` 表，service_role-only RLS；超限返回 429 `THROTTLED`
+- **响应统一 opaque**（round-3 加固）：除了团队密码错（400 `WRONG_TEAM_PASSWORD`）和限流（429）以外，**无论内部状态如何，统一返回 200 `{ message: "如果该邮箱可重发，我们已发送邀请" }`**——不暴露邮箱是否已注册、是否已 setup
+- 内部分支处理：
+  - 用 service_role 查 `auth.admin.listUsers` 找出该 email 对应用户：
+    - 不存在 → 内部记 `EMAIL_NOT_FOUND`，对外 200 opaque
+    - `user_metadata.password_set === true` → 内部记 `ALREADY_SETUP`，对外 200 opaque
+    - 否则继续
+  - `display_name` 从已存在的 `user_metadata.display_name` 取，**不接受客户端传入**
+  - 调 `admin.inviteUserByEmail(email, { data: { display_name }, redirectTo: ${SITE_URL}/auth/callback })`
+  - **重新覆写** `app_metadata.team_pass_verified=true`（兼任孤儿账号修复路径）
+  - 写入 invite_throttle.last_sent_at = now
+  - 返回 200 opaque
 
-**为什么不允许已 setup 用户 resend**：邀请邮件包含一个有效的 access_token，如果对已设密码的账户发送，相当于绕过密码登录的"魔法链接"。这扩大了攻击面，且无业务必要——已 setup 用户应走密码登录，密码忘了走"忘记密码"流程（第二版做）。
+**为什么对已 setup 用户也 opaque**：避免成为邮箱探测器（"输入邮箱看返回不同 → 推断该邮箱是否注册"）。10 人内部团队这层泄漏低危，但成本几乎为零。
+**为什么不允许已 setup 用户实际重发**：邀请链接包含一个有效的 access_token，对已设密码的账户发等于绕过密码登录。维持只对 password_set=false 的用户实际重发的语义，opaque 响应只是把这个分支隐藏起来。
 
 ## 5. 后端 API 改造
 
@@ -306,10 +335,14 @@ window.history.replaceState({}, "", window.location.pathname);
 - POST `{ email, display_name, team_password }`（password 不在此处）
 - Zod strict 校验
 - timingSafeEqual 比较 team_password 与 `SHARED_PASSWORD`
+- 用 service_role 查 `admin.listUsers({ email })` 应用 §4.1.1 状态机：
+  - 已存在 / `password_set=true` → 400 `EMAIL_TAKEN`
+  - 已存在 / `password_set=false`（任一 flag 状态）→ 400 `EMAIL_PENDING`，引导前端走 resend-invite
+  - 不存在 → 走下面的创建流程
 - `admin.inviteUserByEmail(email, { data: { display_name }, redirectTo: ${SITE_URL}/auth/callback })`
 - 立即 `admin.updateUserById(newUser.id, { app_metadata: { team_pass_verified: true } })`
 - **若 updateUserById 失败：调 `admin.deleteUser(newUser.id)` 回滚，返回 500 `INVITE_FAILED`**（避免留下"被邀请但永远 setup 不通"的孤儿账号）
-- 返回 200 `{ message }` 或 400/409 错误码
+- 返回 200 `{ message }` 或上面映射的错误
 
 **`api/auth/setup-account.ts`**（替代原 spec 的 finalize；P1 修复后顺序敏感）
 - POST `{ password }`，需要 `Authorization: Bearer <invite-access-token>`
@@ -343,14 +376,29 @@ window.history.replaceState({}, "", window.location.pathname);
 
 **`api/auth/resend-invite.ts`**（详见 §4.7）
 
-**`api/profile/update.ts`**（P0#1 必需）
-- PATCH `{ display_name }`，需要 token
-- 仅允许更新 `display_name`，**显式忽略**任何 `is_admin` / `email` / `id` 字段（即使前端传了）
-- 用 service_role 执行 `UPDATE profiles SET display_name=$1 WHERE id=auth.uid()`
+**`api/profile/update.ts`**（P0#1 必需，round-3 严格化）
+- PATCH，需要 token
+- **Zod strict schema 只允许 `display_name`**：
+
+  ```ts
+  export const ProfileUpdateSchema = z.object({
+    display_name: z.string().min(1).max(64),
+  }).strict();
+  ```
+
+  携带任何其他字段（`is_admin` / `email` / `id` / 任意未知字段）→ **400 `Invalid payload`**（不静默忽略）。这与 Phase 1 的 prompts/examples strict schema 行为一致，让攻击尝试和前端 bug 都暴露在错误响应里而不是被掩盖
+- 后端用 service_role 执行 `UPDATE profiles SET display_name=$1 WHERE id=auth.uid()`
+- 测试覆盖：传 `is_admin` 必须 400，且 `is_admin` 在数据库保持原值不变
 
 ### 5.2 鉴权中间件（`api/lib/auth.ts`）
 
-**安全边界**（P1 修复）：业务接口的"已认证用户"等价于"profile 存在的用户"。`profiles` 行只能由 `setup-account` 创建，而 `setup-account` 强制要求 `app_metadata.team_pass_verified===true`。因此**绕过路径产生的 auth.users 永远没有 profile，永远过不了下面的 authenticate**。`team_pass_verified` 不在每次业务请求里重复 check，因为 profile 的存在性已经传递了同一个保证。
+**安全边界**（P1 round-2/round-3 修订）：业务接口的"已认证用户"等价于：
+1. `auth.getUser(token)` 成功
+2. `profiles` 行存在（已经过 setup-account 写入）
+3. `user.user_metadata.password_set === true`（已完成设密码）
+
+(2) 蕴含 `team_pass_verified===true`（profile 只能由 setup-account 创建，setup-account 强制 check 此 flag），所以业务接口不再单独 check `team_pass_verified`。
+(3) 关闭"profile 已存在但密码未设"的反向半成功窗口——这种 user 在数据库里看似合法，但 authenticate 仍拒绝服务，强制走完密码设置流程。
 
 ```ts
 export async function authenticate(req: VercelRequest):
@@ -362,9 +410,14 @@ export async function authenticate(req: VercelRequest):
   const { data, error } = await supabase.auth.getUser(token);
   if (error || !data?.user) return null;
 
-  // profile 缺失即拒绝。这一条是单点决定"该 user 是否是合法团队成员"。
-  // 不再单独 check app_metadata.team_pass_verified —— profile 的存在性已经
-  // 蕴含它（见上方"安全边界"段落）。
+  // 关闭反向半成功窗口（P1 round-3）：要求 password_set===true。
+  // setup-account 第 2 步成功后才会写入；半成功状态用户在此被挡住，
+  // 强制走完邀请链接 → 设密码 → 完成 三步流程。
+  if (data.user.user_metadata?.password_set !== true) return null;
+
+  // profile 缺失即拒绝。setup-account 是 profile 唯一写入入口，且要求
+  // team_pass_verified===true，所以 profile 的存在性蕴含"该 user 走过
+  // 完整团队密码门 + 邮件验证流程"。
   const { data: profile } = await supabase
     .from("profiles")
     .select("display_name, is_admin")
@@ -497,6 +550,22 @@ truncate table prompts cascade;
 truncate table examples cascade;
 -- 3) prompts.created_by → created_by_id（见 §3.2）
 -- 4) examples.created_by → created_by_id（见 §3.3）
+-- 5) invite_throttle（resend-invite 限流，见 §4.7）
+create table if not exists public.invite_throttle (
+  email text primary key,
+  last_sent_at timestamptz not null default now()
+);
+alter table public.invite_throttle enable row level security;
+do $$ begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='public' and tablename='invite_throttle'
+      and policyname='service_role_all_invite_throttle'
+  ) then
+    create policy "service_role_all_invite_throttle" on public.invite_throttle
+      for all to service_role using (true) with check (true);
+  end if;
+end $$;
 -- 不在 SQL 里硬编码管理员邮箱，由 setup-account 端点判断
 ```
 
@@ -673,6 +742,26 @@ fi
 - 客户端用非 `VITE_` 前缀访问 `process.env` / `import.meta.env` → fail（点访问 + 字符串索引）
 - 解构形态从 env 对象中解出敏感 key → fail
 
+### 12.4.1 lint:env 的 residual risk（P2 round-3 明确化）
+
+上述 grep 是 best-effort 文本检查，**不能挡住**：
+
+- 字符串拼接：`process.env['SUPABASE' + '_' + 'SERVICE_ROLE_KEY']`
+- 间接访问：`globalThis['process']?.env`、`window['__env__']`
+- `eval('process.env.SUPABASE_SERVICE_ROLE_KEY')`
+- 把敏感 key 写在拆分字符串里（`'SUPABASE_SERVICE' + '_ROLE_KEY'`）
+
+第一版接受这些 residual risk，依据：
+1. 这些都是有意为之的混淆访问，不是无心之失；CI lint 主要防"无心 leak"
+2. 前端 bundle 在 Vercel 构建期由 Vite 生成，只有 `VITE_*` 变量被注入；上面这些访问在客户端运行时实际拿到的是 `undefined`
+3. 真正能让服务端 env 进入前端 bundle 的路径只有"Vite 把变量替换进 bundle"，而 Vite 默认只处理 `VITE_*` 前缀
+
+**第二版升级路径**：把 lint:env 升级为 ESLint custom rule（基于 AST 而非字符串），约束 src/ 中：
+- 仅允许 `import.meta.env.VITE_*` 形态访问 env
+- 禁止 `process.env`、`globalThis['process']`、`eval` 调用
+
+升级到 AST lint 后，上面三条 residual risk 就能在静态层面挡住。当前优先级低于实施 Phase 2 主功能。
+
 ## 13. 已知风险
 
 1. **anon key 暴露**：必要的（前端 supabase-js 需要）。配合 §2.3 的关闭 public signup + profiles 无 anon update policy + 业务表 service_role-only RLS，攻击面已收敛
@@ -718,3 +807,13 @@ fi
 | 5 | P2 | vercel rewrite 负向前瞻不可靠 | §12.3 改为显式两条规则：先 `/api/(.*)` no-op 让 serverless 函数走原路，再 `/(.*)` catch-all 到 index.html |
 | 6 | P2 | lint:env grep 覆盖不全（漏字符串索引、import.meta.env、解构形态） | §12.4 重写：三条规则——禁止任何字面量出现服务端 env 名；禁止前端访问非 VITE_ 前缀的 SUPABASE/ADMIN/SHARED；禁止解构 process.env / import.meta.env |
 | 7 | P2 | signup 的 invite + flag 写入非原子，第二步失败留孤儿账号 | §4.1 / §5.1 加补偿：updateUserById 抛错时调 `admin.deleteUser` 回滚；resend-invite 路径也会顺手补写 flag，作为第二条恢复路径 |
+
+## 附录 C：codex 第 3 轮反馈处理记录
+
+| # | 优先级 | 反馈 | 处理 |
+|---|---|---|---|
+| 1 | P1 | setup-account 反向半成功窗口（profile 已建但 password 未设的 user 仍被当合法成员） | §5.2 收紧 authenticate：profile 存在 **AND** `password_set===true` 才放行；§4.1 流程图标注此恢复路径——半成功 user 在业务接口被 401，强制走完邀请链接重新设密码 |
+| 2 | P1 | 同邮箱重复 signup 状态机未定义 | §4.1.1 新增完整状态机表（4 种既有状态 × 2 个端点行为）；signup 在调 inviteUserByEmail 之前先 `admin.listUsers({email})` 应用状态机；display_name 永不被重发覆盖 |
+| 3 | P1 | resend-invite 缺限流 + 内部状态从响应泄漏 | §4.7 加每邮箱 60s 冷却 + 每 IP 每小时 10 次上限（`invite_throttle` 表追踪）；响应统一 opaque 200 message，内部分支 EMAIL_NOT_FOUND / ALREADY_SETUP 不暴露给客户端；§7.1 在 Migration 006 加 invite_throttle 表 |
+| 4 | P2 | lint:env grep 仍挡不住动态拼接 | §12.4.1 新增 residual risk 段落，明确接受这些极端形态作为 best-effort 边界；指出第二版升级到 ESLint AST custom rule（仅允许 `import.meta.env.VITE_*`，禁 `process.env` / `eval`）作为静态拦截 |
+| 5 | P2 | profile/update 静默忽略敏感字段不如 strict reject | §5.1 改为 Zod strict schema 仅允许 `display_name`，携带 `is_admin/email/id` / 任意未知字段返回 400 `Invalid payload`；与 Phase 1 prompts/examples strict 风格一致 |
