@@ -1,6 +1,6 @@
 # Phase 2: 完整用户体系 — 设计规格文档
 
-> **审核轮次**：本 spec 经过 codex 第 1/2/3/4 轮审核（2026-05-07~05-08），修订记录见末尾「附录 A / B / C / D」。Round 4 主要处理 invite session 在 setup 完成后失效策略、invite_throttle 原子限流、signup TOCTOU 错误映射、可自愈状态边界与错误表拆分等 5 项。
+> **审核轮次**：本 spec 经过 codex 第 1/2/3/4/5 轮审核（2026-05-07~05-08），修订记录见末尾「附录 A / B / C / D / E」。Round 5 主要处理 setup-account 对已完成账号反复调用导致的全局 signOut DoS、IP 限流在 Vercel 上的 best-effort 边界澄清、profile/update 测试口径与 strict reject 对齐等 3 项。
 
 ## 0. 决策汇总（实施前已锁定）
 
@@ -186,20 +186,31 @@ POST /api/auth/signup
     │     profile 缺失"，且 setup-account 被自身的 password_set 检查挡住 →
     │     死锁。这正是当前顺序要避免的。
     │
-    ├─ ⚠️ 邀请 session 失效（P1 round-4 修复，详见 §4.1.2）：
-    │   profile + 密码均成功后，service_role 调
-    │   admin.signOut(user.id, 'global') 撤销该 user 当前所有 refresh_token。
+    ├─ ⚠️ 早返回（P1 round-5 修复）：若 password_set=true 且 profile 已存在
+    │   → 直接返回 409 ALREADY_SETUP，不走后续写入 / signOut。这条防止
+    │   任何带有效 token 的请求反复触发 signOut('global') 把该 user 所有
+    │   refresh_token 踢光，形成账号级 DoS
+    │
+    ├─ ⚠️ 邀请 session 失效（P1 round-4 修复，P1 round-5 条件化，详见 §4.1.2）：
+    │   仅在本次实际执行了步骤 2（首次设密码）才用 service_role 调
+    │   admin.signOut(user.id, 'global') 撤销 refresh_token。
+    │   profile 自愈分支（步骤 2 跳过）同步跳过 signOut——此时账号已是
+    │   密码登录态，全局登出会误踢其他设备。
     │   该调用失败仅记日志、不影响 200 返回（最终一致性，§4.1.2 解释 trade-off）
     │
-    └─ 返回 200 { user_summary, requires_relogin: true }
+    └─ 返回：首次 setup → 200 { user_summary, requires_relogin: true }；
+       profile 自愈 → 200 { user_summary, requires_relogin: false }；
+       已完成账号 → 409 ALREADY_SETUP
     │
     ▼
-前端立即调 supabase.auth.signOut() 清本地 invite session，跳到登录页，
-让用户用新邮箱+新密码重新 login（即便服务端 signOut 因瞬时错误未生效，
-本地清完后也不会再带 invite token 调业务接口）
+前端分支：
+  - requires_relogin=true → 调 supabase.auth.signOut() 清本地 invite session，
+    跳登录页用新密码重新 login（即便服务端 signOut 因瞬时错误未生效，
+    本地清完后也不会再带 invite token 调业务接口）
+  - requires_relogin=false → 直接跳主界面（自愈路径，session 已是密码登录态）
 ```
 
-**幂等恢复**：setup-account 的逻辑显式允许"profile 缺失但 password_set=true 且 team_pass_verified=true"作为可恢复状态——此时跳过密码设置，仅 UPSERT profile。这种状态在正常流程下不该出现，仅作为旧 bug / 数据修复的安全网。**`team_pass_verified=true` 是该自愈分支的硬前置**：缺这个 flag 的 password_set=true / profile 缺失账号一律视为孤儿/损坏数据，setup-account 仍 403 `BYPASS_ATTEMPT`，必须由 resend-invite（顺手覆写 flag）或管理员手动修复后再走流程，避免 setup-account 自身变成绕过路径的恢复点（详见 §4.1.1 与 §5.1）。
+**幂等恢复**：setup-account 的逻辑显式允许"profile 缺失但 password_set=true 且 team_pass_verified=true"作为可恢复状态——此时跳过密码设置与 signOut，仅 UPSERT profile。这种状态在正常流程下不该出现，仅作为旧 bug / 数据修复的安全网。**`team_pass_verified=true` 是该自愈分支的硬前置**：缺这个 flag 的 password_set=true / profile 缺失账号一律视为孤儿/损坏数据，setup-account 仍 403 `BYPASS_ATTEMPT`，必须由 resend-invite（顺手覆写 flag）或管理员手动修复后再走流程，避免 setup-account 自身变成绕过路径的恢复点（详见 §4.1.1 与 §5.1）。
 
 **为什么需要"两段式"**：`admin.inviteUserByEmail` API 不接收 password 参数（这是 Supabase 的设计——邀请的语义就是"待用户接受"）。所以密码必须在用户点击邀请链接确认身份后再设置。
 
@@ -237,7 +248,9 @@ repeat-signup 在 Supabase 默认行为下会"再次发送邀请"，可能覆盖
 
    这会让邀请 session 的 refresh_token 立即失效。`admin.signOut` 失败仅记日志、不阻塞返回（trade-off：最终一致性窗口最长就是 access_token TTL 1 小时；阻塞返回会让 setup 因下游瞬时故障失败而陷入更复杂的恢复路径）。
 
-2. **响应字段**：setup-account 返回体加 `requires_relogin: true`，明确告知前端"当前 session 已不再可用"。
+   **触发条件（P1 round-5 修订）**：仅在本次请求实际执行了密码设置（即旧 `password_set!==true` 的首次 setup 路径）才调 signOut。已完成账号在端点入口处早返回 409，**不会**触达 signOut；profile 自愈分支（password_set 已 true）也跳过 signOut——避免任何带有效 token 的请求把已登录 user 的所有设备 session 一并踢光，构成账号级 DoS。详见 §5.1。
+
+2. **响应字段**：setup-account 在首次 setup 路径返回 `requires_relogin: true`，明确告知前端"当前 session 已不再可用"。profile 自愈分支返回 `requires_relogin: false`，前端可继续用当前 session。
 
 3. **前端配合**：AuthCallback 收到 200 后**必须**：
    - 立刻调 `supabase.auth.signOut()` 清本地 sessionStorage 里的 invite session
@@ -344,9 +357,11 @@ window.history.replaceState({}, "", window.location.pathname);
 **`POST /api/auth/resend-invite`**：
 - 接收 `{ email, team_password }`（**不接收 display_name**——见下文）
 - 校验 `team_password`（防止变成开放的邮件喷射器）
-- **限流**（round-3 加固 + round-4 原子化）：
-  - 每邮箱冷却 60 秒、每 IP 每小时最多 10 次
-  - **必须用单条原子 SQL 实现 check-and-set**，不能"先 SELECT 再 UPDATE"——并发场景下两个同邮箱请求都会读到过期 last_sent_at 然后双发邀请。具体形式：
+- **限流**（round-3 加固 + round-4 原子化 + round-5 边界澄清）：
+  - **真正的安全边界 = `team_password` 校验 + 邮箱级原子冷却**。下面的 IP 限流是 best-effort 体验保护，不是安全控制
+  - 每邮箱冷却 60 秒（**安全控制**，下文）
+  - 每 IP 每小时最多 10 次（**best-effort**，下文）
+  - **邮箱级冷却必须用单条原子 SQL 实现 check-and-set**，不能"先 SELECT 再 UPDATE"——并发场景下两个同邮箱请求都会读到过期 last_sent_at 然后双发邀请。具体形式：
 
     ```sql
     -- 邮箱级冷却：原子 UPSERT，仅当无行 OR 旧行已过冷却时写入并返回行
@@ -361,7 +376,10 @@ window.history.replaceState({}, "", window.location.pathname);
     `RETURNING` 为空 → 没有行被插入或更新（既有行尚在冷却期）→ 端点返回 429 `THROTTLED`；非空 → 拿到限流"配额"，继续后面的 inviteUserByEmail 调用
   - 该 SQL 在单事务里，Postgres 行锁保证两个并发请求里仅一个能命中 `WHERE last_sent_at < ...` 条件并 `RETURNING` 一行；另一个的 ON CONFLICT 因 WHERE 不匹配被静默丢弃，`RETURNING` 为空
   - **建议封装成 Postgres RPC**（`public.try_consume_invite_throttle(email text)` 返回 boolean），让端点代码用 `supabase.rpc('try_consume_invite_throttle', { email })` 一行调用，避免 SQL 散落到 TS 字符串里
-  - IP 级限流（每小时 10 次）第一版用进程内 LRU/Map 即可（Vercel serverless cold-start 会重置，可接受）；若要持久化跨实例，再加一张 `invite_ip_throttle` 表用同样的 atomic UPSERT 模式
+  - **IP 限流是 best-effort（P2 round-5 澄清）**：第一版用进程内 LRU/Map 实现，**显式声明这只是"友好降速"——Vercel serverless 多实例 / 冷启动 / 区域切换会让这个计数分裂或重置**。攻击者真要打邮件喷射或 listUsers 消耗，IP 计数挡不住。所以：
+    - 邮箱级原子冷却（service_role + Postgres 行锁）+ team_password 校验 = 真正的安全边界
+    - IP 计数 = 防同一前端 bug 把 resend 按钮卡死后狂点的体验保护
+    - 第二版若 ops 上观察到真有跨实例 IP 喷射，再升级为 `invite_ip_throttle` 表 + 同样的 atomic UPSERT 模式（并把 IP 计数从体验降级线提升到安全控制线）
   - 超限返回 429 `THROTTLED`
 - **响应统一 opaque**（round-3 加固）：除了团队密码错（400 `WRONG_TEAM_PASSWORD`）和限流（429）以外，**无论内部状态如何，统一返回 200 `{ message: "如果该邮箱可重发，我们已发送邀请" }`**——不暴露邮箱是否已注册、是否已 setup
 - 内部分支处理（**限流原子检查必须在分支判断之前**——避免"用户不存在"分支也能无限发起 listUsers 调用消耗 Supabase 配额）：
@@ -405,15 +423,18 @@ window.history.replaceState({}, "", window.location.pathname);
 - POST `{ password }`，需要 `Authorization: Bearer <invite-access-token>`
 - 校验 token，拿 user
 - 校验 `user.app_metadata.team_pass_verified === true`，否则 403 `BYPASS_ATTEMPT`
+- **早返回（P1 round-5 修复）**：在做任何写操作之前，先判断"账号是否已完成 setup"。若 `password_set===true` **且** profile 已存在 → 直接返回 409 `ALREADY_SETUP`，**不执行**后续 UPSERT / updateUserById / signOut。
+  - 动机：步骤 3 的 `admin.signOut(user.id, 'global')` 在已完成账号上是有破坏力的副作用。任何持有该 user 有效 token（包括普通密码登录 session、未过期 invite token）的调用方反复打这个端点，就能持续把该 user 的所有 refresh_token 踢光，构成账号级 DoS。早返回把 signOut 限定为"真正完成 setup 这一次性动作"的副作用
+  - 这条早返回**不影响**自愈分支：profile 缺失（无论 password_set 状态）仍走下方流程
 - **顺序固定**（防半成功状态死锁）：
   1. UPSERT profile：`INSERT INTO profiles (id, email, display_name, is_admin) VALUES (...) ON CONFLICT (id) DO NOTHING`
      - `display_name` 从 `user.user_metadata.display_name` 取
      - `is_admin = ADMIN_EMAILS.includes(email)`
   2. 仅当 `user.user_metadata.password_set !== true` 时，才调
      `admin.updateUserById(user.id, { password, user_metadata: { ...existing, password_set: true } })`
-  3. **撤销邀请 session（round-4 修复，详见 §4.1.2）**：调 `admin.signOut(user.id, 'global')`，失败仅记日志
-- 返回 200 `{ user_summary, requires_relogin: true }`
-- **可自愈状态的精确边界**（P2 round-4 澄清）：setup-account 只能修复"`team_pass_verified=true` AND `password_set=true` AND profile 缺失"这一种孤儿状态——第 1 步补 profile，第 2 步因 password_set 已 true 跳过，第 3 步签出。**任何 `team_pass_verified=false` 的孤儿/损坏数据**（即便 password_set=true 或 profile 已部分写入），setup-account 一律返回 403 `BYPASS_ATTEMPT`，必须由 resend-invite 顺手覆写 flag 后才能再走 setup，或由管理员从 Supabase 控制台手动修复。这条边界防止 setup-account 自身变成绕过路径的恢复点
+  3. **撤销邀请 session（round-4 修复，详见 §4.1.2）**：仅在本次实际执行了步骤 2（即真正完成首次 setup）时，调 `admin.signOut(user.id, 'global')`，失败仅记日志。**纯 profile 自愈分支（步骤 2 跳过）不调 signOut**——此时账号已是密码登录态，没有"撤销 invite session"的语义需求，强行 signOut 会把该 user 在其他设备的合法 session 一并踢光
+- 返回 200 `{ user_summary, requires_relogin: true }`（仅在真正完成首次 setup 的路径）；profile 自愈分支返回 200 `{ user_summary, requires_relogin: false }`（前端可继续用当前 session）；已完成账号返回 409 `ALREADY_SETUP`
+- **可自愈状态的精确边界**（P2 round-4 澄清 + P1 round-5 强化）：setup-account 只能修复"`team_pass_verified=true` AND `password_set=true` AND profile 缺失"这一种孤儿状态——第 1 步补 profile，第 2 步因 password_set 已 true 跳过，**第 3 步也跳过**（避免对已设密码用户做全局登出）。**任何 `team_pass_verified=false` 的孤儿/损坏数据**（即便 password_set=true 或 profile 已部分写入），setup-account 一律返回 403 `BYPASS_ATTEMPT`，必须由 resend-invite 顺手覆写 flag 后才能再走 setup，或由管理员从 Supabase 控制台手动修复。这条边界防止 setup-account 自身变成绕过路径的恢复点
 
 **`api/auth/login.ts`**
 - POST `{ email, password }`
@@ -693,9 +714,10 @@ Vercel 环境变量：`ADMIN_EMAILS=19338106204@163.com`（多个用逗号分隔
 后端测试（`tests/api/auth.test.ts` 新建）：
 - signup：team_password 错 → 400；邮箱已存在且 password_set=true → 400 `EMAIL_TAKEN`；已存在但 password_set=false → 400 `EMAIL_PENDING`；正常 → 200 + admin.inviteUserByEmail 被调用 + app_metadata 写入
 - signup TOCTOU（round-4）：mock listUsers 返回不存在但 inviteUserByEmail 抛 duplicate-user 错（夹具用 supabase-js 实测的精确错误形态）→ 端点必须返回 400 `EMAIL_PENDING` 或 `EMAIL_TAKEN`，**不能 500**
-- setup-account：缺 team_pass_verified → 403；token 无效 → 401；正常 → 200 + 创建 profile + ADMIN_EMAILS 命中 → is_admin=true + `requires_relogin: true`
-- setup-account 邀请 session 撤销（round-4）：成功路径下 `admin.signOut(user.id, 'global')` 必须被调用一次；mock signOut 抛错 → 端点仍返回 200（仅记日志）
-- setup-account 自愈分支边界（round-4）：`team_pass_verified=true / password_set=true / profile 缺失` → 200 自愈；`team_pass_verified=false / password_set=true / profile 缺失` → 403 `BYPASS_ATTEMPT`（不能借此自愈）
+- setup-account：缺 team_pass_verified → 403；token 无效 → 401；正常首次 setup → 200 + 创建 profile + ADMIN_EMAILS 命中 → is_admin=true + `requires_relogin: true`
+- setup-account 邀请 session 撤销（round-4）：首次 setup 成功路径下 `admin.signOut(user.id, 'global')` 必须被调用一次；mock signOut 抛错 → 端点仍返回 200（仅记日志）
+- **setup-account 已完成账号防 DoS（round-5）**：`password_set=true` 且 profile 已存在 → 409 `ALREADY_SETUP`，且 `admin.signOut` **不得被调用**（mock 断言调用次数为 0）；返回体不带 `requires_relogin`
+- setup-account 自愈分支边界（round-4 + round-5）：`team_pass_verified=true / password_set=true / profile 缺失` → 200 自愈 + `requires_relogin: false` + `admin.signOut` **不得被调用**；`team_pass_verified=false / password_set=true / profile 缺失` → 403 `BYPASS_ATTEMPT`（不能借此自愈）
 - login：未验证邮箱 → 401 `EMAIL_NOT_VERIFIED`；密码错 → 401；正常 → 200
 - me：无 token → 401；有 token → 返回 user info
 - resend-invite：team_password 错 → 400；冷却期内重发 → 429 `THROTTLED`；正常 → 200
@@ -708,7 +730,8 @@ Vercel 环境变量：`ADMIN_EMAILS=19338106204@163.com`（多个用逗号分隔
 - examples DELETE 新增 admin 可删 case
 
 profile 测试：
-- profile/update 试图传 is_admin → 后端忽略，is_admin 字段保持原值
+- profile/update 试图传 `is_admin` / `email` / `id` / 任意未知字段 → 400 `Invalid payload`，且数据库 `is_admin` 保持原值不变（strict reject 与 §5.1 Zod schema 一致，P2 round-5 校准）
+- profile/update 只传 `display_name` → 200，数据库 `display_name` 已更新
 
 ## 10. 不做的事情（第二版再加）
 
@@ -915,3 +938,11 @@ fi
 | 4 | P1 | password_set 元数据更新后 token freshness 未闭环（前端可能用旧 session 触发 401/循环） | 与 #1 同步处理：`requires_relogin: true` 明确告知前端不要复用 invite session；前端在 setup 200 后立即 signOut + 跳登录页，等价于强制 token 全量刷新（拿密码登录 session 而不是被动 refreshSession） |
 | 5 | P2 | "profile 缺失但 password_set=true" 自愈条件不精确，可能与 team_pass_verified 缺失冲突 | §4.1 幂等恢复段落 + §5.1 setup-account 项加约束："team_pass_verified=true AND password_set=true AND profile 缺失"才允许 setup-account 自愈；缺 flag 的孤儿账号一律 403，必须走 resend-invite（顺手覆写 flag）或管理员手动修复；§9 加自愈分支边界测试 |
 | 6 | P2 | §8 错误表把重复邮箱统一成 EMAIL_TAKEN，与 §4.1.1 状态机不一致 | §8 拆成两行：`password_set=true` → `EMAIL_TAKEN`（提示直接登录）；`password_set=false` → `EMAIL_PENDING`（提示查收/重发邀请） |
+
+## 附录 E：codex 第 5 轮反馈处理记录
+
+| # | 优先级 | 反馈 | 处理 |
+|---|---|---|---|
+| 1 | P1 | setup-account 对已完成账号仍执行 `admin.signOut('global')`：任何持有该 user 有效 token（普通密码登录 session、未过期 invite token）的请求方反复打这个端点，就能持续把该 user 所有 refresh_token 踢光，构成账号级 DoS | §5.1 setup-account 端点加早返回：`password_set=true` 且 profile 已存在 → 直接 409 `ALREADY_SETUP`，**不执行**任何写操作 / signOut；§4.1 流程图同步标注；§4.1.2 把 signOut 的触发条件从"profile + 密码均成功后"改为"仅本次实际执行了步骤 2（首次设密码）"——profile 自愈分支不调 signOut（避免误踢已登录 user 的其他设备 session）；返回体增加 `requires_relogin` 区分（首次 setup=true / 自愈=false）；§9 加专项测试断言已完成账号 / 自愈分支的 signOut 调用次数=0 |
+| 2 | P2 | IP 每小时 10 次限流写成进程内 LRU/Map，在 Vercel 多实例 / 冷启动 / 区域切换下不可靠，作为安全控制约束太弱 | §4.7 显式区分两类限流：邮箱级原子冷却 = 真正的安全边界（service_role + Postgres 行锁）；IP 级计数 = best-effort 体验保护（防同一前端 bug 把 resend 按钮卡死狂点）。措辞改为"显式声明这只是友好降速 — 攻击者真要喷射，IP 计数挡不住，靠 team_password + 邮箱级原子冷却兜底"；第二版升级路径列出（若 ops 上观察到真有跨实例 IP 喷射，再升级为 `invite_ip_throttle` 表 + atomic UPSERT，提升到安全控制线） |
+| 3 | P2 | §9 profile/update 测试口径仍是旧的"后端忽略，is_admin 保持原值"，与 §5.1 已改为 strict reject 不一致 | §9 改为：传 `is_admin` / `email` / `id` / 任意未知字段 → 400 `Invalid payload`，且数据库 `is_admin` 保持原值不变（与 §5.1 Zod strict schema 对齐）；增加"只传 display_name → 200 + DB 已更新"正向用例 |
