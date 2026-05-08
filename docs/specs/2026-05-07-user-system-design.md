@@ -1,6 +1,6 @@
 # Phase 2: 完整用户体系 — 设计规格文档
 
-> **审核轮次**：本 spec 经过 codex 第 1/2/3/4/5 轮审核（2026-05-07~05-08），修订记录见末尾「附录 A / B / C / D / E」。Round 5 主要处理 setup-account 对已完成账号反复调用导致的全局 signOut DoS、IP 限流在 Vercel 上的 best-effort 边界澄清、profile/update 测试口径与 strict reject 对齐等 3 项。
+> **审核轮次**：本 spec 经过 codex 第 1/2/3/4/5/6 轮审核（2026-05-07~05-08），修订记录见末尾「附录 A / B / C / D / E / F」。Round 6 主要处理 `admin.signOut` 参数错误（user.id vs JWT，会让 round-4/5 的 invite session 撤销静默失效）和 §4.1 流程图早返回顺序与 §5.1 不一致 2 项。
 
 ## 0. 决策汇总（实施前已锁定）
 
@@ -164,6 +164,12 @@ POST /api/auth/signup
     │
     ├─ 校验该 user 的 app_metadata.team_pass_verified===true（防止有人直接拿到 invite 链接绕过）
     │
+    ├─ ⚠️ 早返回（P1 round-5 修复，必须在任何写操作之前）：
+    │   查询 profile 是否已存在，若 password_set=true 且 profile 已存在
+    │   → 直接返回 409 ALREADY_SETUP，不走后续写入 / signOut。这条防止
+    │   任何带有效 token 的请求反复触发 signOut 把该 user 所有 refresh_token
+    │   踢光，形成账号级 DoS
+    │
     ├─ ⚠️ 顺序很重要（P1 修复）：先 UPSERT profile，再设密码
     │
     │   1) UPSERT profile（display_name 取自 user_metadata，is_admin 由 ADMIN_EMAILS 决定）
@@ -186,14 +192,11 @@ POST /api/auth/signup
     │     profile 缺失"，且 setup-account 被自身的 password_set 检查挡住 →
     │     死锁。这正是当前顺序要避免的。
     │
-    ├─ ⚠️ 早返回（P1 round-5 修复）：若 password_set=true 且 profile 已存在
-    │   → 直接返回 409 ALREADY_SETUP，不走后续写入 / signOut。这条防止
-    │   任何带有效 token 的请求反复触发 signOut('global') 把该 user 所有
-    │   refresh_token 踢光，形成账号级 DoS
-    │
-    ├─ ⚠️ 邀请 session 失效（P1 round-4 修复，P1 round-5 条件化，详见 §4.1.2）：
+    ├─ ⚠️ 邀请 session 失效（P1 round-4 修复，P1 round-5 条件化，P1 round-6 参数修正，详见 §4.1.2）：
     │   仅在本次实际执行了步骤 2（首次设密码）才用 service_role 调
-    │   admin.signOut(user.id, 'global') 撤销 refresh_token。
+    │   admin.signOut(<本次请求的 invite access_token>, 'global') 撤销 refresh_token。
+    │   ⚠️ 第一个参数是 JWT 不是 user.id（早期写法 admin.signOut(user.id, 'global')
+    │   会静默失效，详见 §4.1.2 "历史教训" 段）。
     │   profile 自愈分支（步骤 2 跳过）同步跳过 signOut——此时账号已是
     │   密码登录态，全局登出会误踢其他设备。
     │   该调用失败仅记日志、不影响 200 返回（最终一致性，§4.1.2 解释 trade-off）
@@ -241,12 +244,22 @@ repeat-signup 在 Supabase 默认行为下会"再次发送邀请"，可能覆盖
 1. **服务端撤销**：setup-account 顺序的最后一步（profile + 密码均成功之后），用 service_role 调用：
 
    ```ts
-   // 撤销该 user 当下的所有 refresh_token；access_token 因 Supabase JWT 是无状态签名
-   // 不能"主动作废"，但 access_token 默认 1 小时后过期，且失去 refresh_token 后无法续期
-   await admin.signOut(user.id, 'global');
+   // ⚠️ admin.signOut 的第一个参数是有效 JWT（access_token），不是 user.id
+   // —— 见 https://supabase.com/docs/reference/javascript/auth-admin-signout
+   //
+   // 这里复用本次请求 Authorization 头里的 invite access_token：
+   //   const auth = req.headers.authorization;          // "Bearer <jwt>"
+   //   const jwt = auth.slice(7);
+   //   await admin.signOut(jwt, 'global');
+   //
+   // scope='global' 会让该 user 所有 refresh_token 失效（不只是这条 session）。
+   // 已发 access_token 因 Supabase JWT 是无状态签名不能"主动作废"，但失去
+   // refresh_token 后无法续期，最长残留 access_token TTL 1 小时即彻底失效。
    ```
 
-   这会让邀请 session 的 refresh_token 立即失效。`admin.signOut` 失败仅记日志、不阻塞返回（trade-off：最终一致性窗口最长就是 access_token TTL 1 小时；阻塞返回会让 setup 因下游瞬时故障失败而陷入更复杂的恢复路径）。
+   `admin.signOut` 失败仅记日志、不阻塞返回（trade-off：最终一致性窗口最长就是 access_token TTL 1 小时；阻塞返回会让 setup 因下游瞬时故障失败而陷入更复杂的恢复路径）。
+
+   **历史教训（P1 round-6 修复）**：round-4/5 早期写法是 `admin.signOut(user.id, 'global')`，参数类型完全错——Supabase JS 的 `admin.signOut` 签名是 `(jwt, scope)`，传 user id 当 JWT 解析会让撤销静默失效（API 不会报错但也不会撤销任何 token），整个 round-4/5 的 invite session 撤销设计落空。实施时**测试必须断言 mock 收到的第一个参数是当前请求 Bearer token，不是 user id**。
 
    **触发条件（P1 round-5 修订）**：仅在本次请求实际执行了密码设置（即旧 `password_set!==true` 的首次 setup 路径）才调 signOut。已完成账号在端点入口处早返回 409，**不会**触达 signOut；profile 自愈分支（password_set 已 true）也跳过 signOut——避免任何带有效 token 的请求把已登录 user 的所有设备 session 一并踢光，构成账号级 DoS。详见 §5.1。
 
@@ -424,7 +437,7 @@ window.history.replaceState({}, "", window.location.pathname);
 - 校验 token，拿 user
 - 校验 `user.app_metadata.team_pass_verified === true`，否则 403 `BYPASS_ATTEMPT`
 - **早返回（P1 round-5 修复）**：在做任何写操作之前，先判断"账号是否已完成 setup"。若 `password_set===true` **且** profile 已存在 → 直接返回 409 `ALREADY_SETUP`，**不执行**后续 UPSERT / updateUserById / signOut。
-  - 动机：步骤 3 的 `admin.signOut(user.id, 'global')` 在已完成账号上是有破坏力的副作用。任何持有该 user 有效 token（包括普通密码登录 session、未过期 invite token）的调用方反复打这个端点，就能持续把该 user 的所有 refresh_token 踢光，构成账号级 DoS。早返回把 signOut 限定为"真正完成 setup 这一次性动作"的副作用
+  - 动机：步骤 3 的 signOut 在已完成账号上是有破坏力的副作用。任何持有该 user 有效 token（包括普通密码登录 session、未过期 invite token）的调用方反复打这个端点，就能持续把该 user 的所有 refresh_token 踢光，构成账号级 DoS。早返回把 signOut 限定为"真正完成 setup 这一次性动作"的副作用
   - 这条早返回**不影响**自愈分支：profile 缺失（无论 password_set 状态）仍走下方流程
 - **顺序固定**（防半成功状态死锁）：
   1. UPSERT profile：`INSERT INTO profiles (id, email, display_name, is_admin) VALUES (...) ON CONFLICT (id) DO NOTHING`
@@ -432,7 +445,7 @@ window.history.replaceState({}, "", window.location.pathname);
      - `is_admin = ADMIN_EMAILS.includes(email)`
   2. 仅当 `user.user_metadata.password_set !== true` 时，才调
      `admin.updateUserById(user.id, { password, user_metadata: { ...existing, password_set: true } })`
-  3. **撤销邀请 session（round-4 修复，详见 §4.1.2）**：仅在本次实际执行了步骤 2（即真正完成首次 setup）时，调 `admin.signOut(user.id, 'global')`，失败仅记日志。**纯 profile 自愈分支（步骤 2 跳过）不调 signOut**——此时账号已是密码登录态，没有"撤销 invite session"的语义需求，强行 signOut 会把该 user 在其他设备的合法 session 一并踢光
+  3. **撤销邀请 session（round-4 修复，round-6 参数修正，详见 §4.1.2）**：仅在本次实际执行了步骤 2（即真正完成首次 setup）时，调 `admin.signOut(jwt, 'global')`，**`jwt` 必须是本次请求 `Authorization: Bearer ...` 头里的 invite access_token**——`admin.signOut` 的第一个参数是有效 JWT 而非 user.id（早期 spec 写的 `admin.signOut(user.id, 'global')` 会被 API 当 JWT 解析失败而静默失效，整个撤销逻辑形同虚设）。失败仅记日志。**纯 profile 自愈分支（步骤 2 跳过）不调 signOut**——此时账号已是密码登录态，没有"撤销 invite session"的语义需求，强行 signOut 会把该 user 在其他设备的合法 session 一并踢光
 - 返回 200 `{ user_summary, requires_relogin: true }`（仅在真正完成首次 setup 的路径）；profile 自愈分支返回 200 `{ user_summary, requires_relogin: false }`（前端可继续用当前 session）；已完成账号返回 409 `ALREADY_SETUP`
 - **可自愈状态的精确边界**（P2 round-4 澄清 + P1 round-5 强化）：setup-account 只能修复"`team_pass_verified=true` AND `password_set=true` AND profile 缺失"这一种孤儿状态——第 1 步补 profile，第 2 步因 password_set 已 true 跳过，**第 3 步也跳过**（避免对已设密码用户做全局登出）。**任何 `team_pass_verified=false` 的孤儿/损坏数据**（即便 password_set=true 或 profile 已部分写入），setup-account 一律返回 403 `BYPASS_ATTEMPT`，必须由 resend-invite 顺手覆写 flag 后才能再走 setup，或由管理员从 Supabase 控制台手动修复。这条边界防止 setup-account 自身变成绕过路径的恢复点
 
@@ -715,7 +728,7 @@ Vercel 环境变量：`ADMIN_EMAILS=19338106204@163.com`（多个用逗号分隔
 - signup：team_password 错 → 400；邮箱已存在且 password_set=true → 400 `EMAIL_TAKEN`；已存在但 password_set=false → 400 `EMAIL_PENDING`；正常 → 200 + admin.inviteUserByEmail 被调用 + app_metadata 写入
 - signup TOCTOU（round-4）：mock listUsers 返回不存在但 inviteUserByEmail 抛 duplicate-user 错（夹具用 supabase-js 实测的精确错误形态）→ 端点必须返回 400 `EMAIL_PENDING` 或 `EMAIL_TAKEN`，**不能 500**
 - setup-account：缺 team_pass_verified → 403；token 无效 → 401；正常首次 setup → 200 + 创建 profile + ADMIN_EMAILS 命中 → is_admin=true + `requires_relogin: true`
-- setup-account 邀请 session 撤销（round-4）：首次 setup 成功路径下 `admin.signOut(user.id, 'global')` 必须被调用一次；mock signOut 抛错 → 端点仍返回 200（仅记日志）
+- setup-account 邀请 session 撤销（round-4 + round-6）：首次 setup 成功路径下 `admin.signOut(jwt, 'global')` 必须被调用一次，**断言传入的第一个参数等于本次请求 `Authorization: Bearer ...` 头里的 token，不是 `user.id`**（这是 round-6 拦下的实施陷阱）；mock signOut 抛错 → 端点仍返回 200（仅记日志）
 - **setup-account 已完成账号防 DoS（round-5）**：`password_set=true` 且 profile 已存在 → 409 `ALREADY_SETUP`，且 `admin.signOut` **不得被调用**（mock 断言调用次数为 0）；返回体不带 `requires_relogin`
 - setup-account 自愈分支边界（round-4 + round-5）：`team_pass_verified=true / password_set=true / profile 缺失` → 200 自愈 + `requires_relogin: false` + `admin.signOut` **不得被调用**；`team_pass_verified=false / password_set=true / profile 缺失` → 403 `BYPASS_ATTEMPT`（不能借此自愈）
 - login：未验证邮箱 → 401 `EMAIL_NOT_VERIFIED`；密码错 → 401；正常 → 200
@@ -946,3 +959,10 @@ fi
 | 1 | P1 | setup-account 对已完成账号仍执行 `admin.signOut('global')`：任何持有该 user 有效 token（普通密码登录 session、未过期 invite token）的请求方反复打这个端点，就能持续把该 user 所有 refresh_token 踢光，构成账号级 DoS | §5.1 setup-account 端点加早返回：`password_set=true` 且 profile 已存在 → 直接 409 `ALREADY_SETUP`，**不执行**任何写操作 / signOut；§4.1 流程图同步标注；§4.1.2 把 signOut 的触发条件从"profile + 密码均成功后"改为"仅本次实际执行了步骤 2（首次设密码）"——profile 自愈分支不调 signOut（避免误踢已登录 user 的其他设备 session）；返回体增加 `requires_relogin` 区分（首次 setup=true / 自愈=false）；§9 加专项测试断言已完成账号 / 自愈分支的 signOut 调用次数=0 |
 | 2 | P2 | IP 每小时 10 次限流写成进程内 LRU/Map，在 Vercel 多实例 / 冷启动 / 区域切换下不可靠，作为安全控制约束太弱 | §4.7 显式区分两类限流：邮箱级原子冷却 = 真正的安全边界（service_role + Postgres 行锁）；IP 级计数 = best-effort 体验保护（防同一前端 bug 把 resend 按钮卡死狂点）。措辞改为"显式声明这只是友好降速 — 攻击者真要喷射，IP 计数挡不住，靠 team_password + 邮箱级原子冷却兜底"；第二版升级路径列出（若 ops 上观察到真有跨实例 IP 喷射，再升级为 `invite_ip_throttle` 表 + atomic UPSERT，提升到安全控制线） |
 | 3 | P2 | §9 profile/update 测试口径仍是旧的"后端忽略，is_admin 保持原值"，与 §5.1 已改为 strict reject 不一致 | §9 改为：传 `is_admin` / `email` / `id` / 任意未知字段 → 400 `Invalid payload`，且数据库 `is_admin` 保持原值不变（与 §5.1 Zod strict schema 对齐）；增加"只传 display_name → 200 + DB 已更新"正向用例 |
+
+## 附录 F：codex 第 6 轮反馈处理记录
+
+| # | 优先级 | 反馈 | 处理 |
+|---|---|---|---|
+| 1 | P1 | `admin.signOut` 第一个参数写成 `user.id` 是错的——Supabase JS 的 admin signOut 接收的是有效 JWT/access_token，不是 auth user id（[官方文档](https://supabase.com/docs/reference/javascript/auth-admin-signout)）。若实施按 spec 文字写，首次 setup 后 invite refresh_token 不会被撤销，round-4/5 收敛 invite session 的安全设计静默失效 | §4.1.2 服务端撤销代码块改为：`const jwt = req.headers.authorization.slice(7); await admin.signOut(jwt, 'global');`，并加"历史教训"段记录这个陷阱；§4.1 流程图、§5.1 setup-account 步骤 3 同步把 `admin.signOut(user.id, 'global')` 改为 `admin.signOut(jwt, 'global')` 并标注 jwt 来自请求 Authorization 头；§9 测试断言加"传入 signOut 的第一个参数必须等于请求 Bearer token，不能是 user.id"——这是回归测试，专门防止后续重构把它误改回去 |
+| 2 | P3 | §4.1 流程图把"早返回 ALREADY_SETUP"画在 UPSERT/设密码之后，但 §5.1 文字明说"在做任何写操作之前"判断已完成账号。两个口径不一致，按图实现会变成"先 UPSERT 再判断"，让早返回失效 | §4.1 流程图把早返回块从 UPSERT 之后移到 UPSERT 之前（紧跟 team_pass_verified 校验后），与 §5.1 文字执行顺序对齐 |
