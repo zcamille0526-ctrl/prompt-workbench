@@ -1,6 +1,6 @@
 # Phase 2: 完整用户体系 — 设计规格文档
 
-> **审核轮次**：本 spec 经过 codex 第 1/2/3 轮审核（2026-05-07），修订记录见末尾「附录 A / B / C」。Round 3 主要处理 setup-account 反向半成功窗口、同邮箱重复 signup 状态机、resend-invite 限流 + opaque 响应、profile/update strict reject 等 5 项。
+> **审核轮次**：本 spec 经过 codex 第 1/2/3/4 轮审核（2026-05-07~05-08），修订记录见末尾「附录 A / B / C / D」。Round 4 主要处理 invite session 在 setup 完成后失效策略、invite_throttle 原子限流、signup TOCTOU 错误映射、可自愈状态边界与错误表拆分等 5 项。
 
 ## 0. 决策汇总（实施前已锁定）
 
@@ -186,13 +186,20 @@ POST /api/auth/signup
     │     profile 缺失"，且 setup-account 被自身的 password_set 检查挡住 →
     │     死锁。这正是当前顺序要避免的。
     │
-    └─ 返回 200 { user_summary }
+    ├─ ⚠️ 邀请 session 失效（P1 round-4 修复，详见 §4.1.2）：
+    │   profile + 密码均成功后，service_role 调
+    │   admin.signOut(user.id, 'global') 撤销该 user 当前所有 refresh_token。
+    │   该调用失败仅记日志、不影响 200 返回（最终一致性，§4.1.2 解释 trade-off）
+    │
+    └─ 返回 200 { user_summary, requires_relogin: true }
     │
     ▼
-前端跳主界面
+前端立即调 supabase.auth.signOut() 清本地 invite session，跳到登录页，
+让用户用新邮箱+新密码重新 login（即便服务端 signOut 因瞬时错误未生效，
+本地清完后也不会再带 invite token 调业务接口）
 ```
 
-**幂等恢复**：setup-account 的逻辑显式允许"profile 缺失但 password_set=true"作为可恢复状态——此时跳过密码设置，仅 UPSERT profile。这种状态在正常流程下不该出现，仅作为旧 bug / 数据修复的安全网。
+**幂等恢复**：setup-account 的逻辑显式允许"profile 缺失但 password_set=true 且 team_pass_verified=true"作为可恢复状态——此时跳过密码设置，仅 UPSERT profile。这种状态在正常流程下不该出现，仅作为旧 bug / 数据修复的安全网。**`team_pass_verified=true` 是该自愈分支的硬前置**：缺这个 flag 的 password_set=true / profile 缺失账号一律视为孤儿/损坏数据，setup-account 仍 403 `BYPASS_ATTEMPT`，必须由 resend-invite（顺手覆写 flag）或管理员手动修复后再走流程，避免 setup-account 自身变成绕过路径的恢复点（详见 §4.1.1 与 §5.1）。
 
 **为什么需要"两段式"**：`admin.inviteUserByEmail` API 不接收 password 参数（这是 Supabase 的设计——邀请的语义就是"待用户接受"）。所以密码必须在用户点击邀请链接确认身份后再设置。
 
@@ -213,6 +220,35 @@ repeat-signup 在 Supabase 默认行为下会"再次发送邀请"，可能覆盖
 - **signup 永远不重新调用 `inviteUserByEmail`**——避免 display_name 被覆盖、邀请链接被多次签发供攻击者拼凑
 - **display_name 只在首次 signup 时由客户端提供**——后续任何重发路径都从 `user_metadata` 读取
 - 状态判定的源头是 `auth.users` 行（signup 前用 `admin.listUsers({ email })` 查询），不依赖 profiles（profiles 滞后）
+
+### 4.1.2 邀请 session 在 setup 完成后必须失效（P1 round-4 修复）
+
+**问题**：邀请邮件 fragment 里的 `access_token` 是一段有效的 Supabase JWT。Round-3 把 `authenticate()` 收紧为"profile 存在 + password_set=true"，看似挡住了 setup 之前的 invite token。但**一旦用户成功完成 setup-account**，profile 写入 + password_set 翻 true，**同一个邮件链接里的 access_token（直到自然过期前，默认 1 小时）也会满足 authenticate 条件**——即任何持有该邀请链接副本的人（截图、转发、浏览器历史）在窗口期内都能调业务接口。
+
+**修复**：
+
+1. **服务端撤销**：setup-account 顺序的最后一步（profile + 密码均成功之后），用 service_role 调用：
+
+   ```ts
+   // 撤销该 user 当下的所有 refresh_token；access_token 因 Supabase JWT 是无状态签名
+   // 不能"主动作废"，但 access_token 默认 1 小时后过期，且失去 refresh_token 后无法续期
+   await admin.signOut(user.id, 'global');
+   ```
+
+   这会让邀请 session 的 refresh_token 立即失效。`admin.signOut` 失败仅记日志、不阻塞返回（trade-off：最终一致性窗口最长就是 access_token TTL 1 小时；阻塞返回会让 setup 因下游瞬时故障失败而陷入更复杂的恢复路径）。
+
+2. **响应字段**：setup-account 返回体加 `requires_relogin: true`，明确告知前端"当前 session 已不再可用"。
+
+3. **前端配合**：AuthCallback 收到 200 后**必须**：
+   - 立刻调 `supabase.auth.signOut()` 清本地 sessionStorage 里的 invite session
+   - 跳转登录页，让用户用刚设的密码 + 邮箱重新 login 拿到一个干净的密码登录 session
+   - 不直接跳主界面（即便业务接口当下能用，残留 invite token 仍是泄漏面）
+
+4. **业务接口侧的兜底**（不替代上面，是纵深防御）：authenticate 不区分"invite token"还是"密码登录 token"——两者都通过 supabase.auth.getUser 返回有效 user。但若步骤 1 成功撤销了 refresh，再加上前端步骤 3 清空了本地 token，残留 invite access_token 自然到期就消失。**第一版接受最长 1 小时的残留窗口**（即"邀请链接被泄漏 + setup 后不到 1 小时内被滥用"的极小概率窗口），换取实现简单。
+
+5. **边界澄清**：access_token 即时撤销在 Supabase JWT 模型下需要黑名单或更短 TTL，二者代价较高且偏离主路径。第二版升级路径：把 Supabase access_token TTL 调到 5~10 分钟（控制台可改），把残留窗口从 1 小时收敛到分钟级；同时考虑给 invite token 单独标记（`user_metadata.invite_session_id`）并在 authenticate 中拒绝带该标记的 token。
+
+**测试要求**（§9 已涵盖）：setup-account 成功后用同一 invite access_token 调 `/api/auth/me` 应在 refresh 流程中被拒（直接调 access_token 在 TTL 内仍能通过 getUser 是预期，**不是测试点**）；前端 AuthCallback 集成测试覆盖"setup 200 后立即 signOut + 跳登录页"。
 
 ### 4.2 登录
 
@@ -308,12 +344,28 @@ window.history.replaceState({}, "", window.location.pathname);
 **`POST /api/auth/resend-invite`**：
 - 接收 `{ email, team_password }`（**不接收 display_name**——见下文）
 - 校验 `team_password`（防止变成开放的邮件喷射器）
-- **限流**（round-3 加固）：
-  - 每邮箱冷却 60 秒（`auth.users.last_sign_in_at` / 自建 `invite_throttle` 表追踪上次发送时间）
-  - 每 IP 每小时最多 10 次
-  - 第一版用一张 `invite_throttle (email text primary, last_sent_at timestamptz)` 表，service_role-only RLS；超限返回 429 `THROTTLED`
+- **限流**（round-3 加固 + round-4 原子化）：
+  - 每邮箱冷却 60 秒、每 IP 每小时最多 10 次
+  - **必须用单条原子 SQL 实现 check-and-set**，不能"先 SELECT 再 UPDATE"——并发场景下两个同邮箱请求都会读到过期 last_sent_at 然后双发邀请。具体形式：
+
+    ```sql
+    -- 邮箱级冷却：原子 UPSERT，仅当无行 OR 旧行已过冷却时写入并返回行
+    INSERT INTO public.invite_throttle (email, last_sent_at)
+    VALUES ($1, now())
+    ON CONFLICT (email) DO UPDATE
+      SET last_sent_at = now()
+      WHERE invite_throttle.last_sent_at < now() - interval '60 seconds'
+    RETURNING email;
+    ```
+
+    `RETURNING` 为空 → 没有行被插入或更新（既有行尚在冷却期）→ 端点返回 429 `THROTTLED`；非空 → 拿到限流"配额"，继续后面的 inviteUserByEmail 调用
+  - 该 SQL 在单事务里，Postgres 行锁保证两个并发请求里仅一个能命中 `WHERE last_sent_at < ...` 条件并 `RETURNING` 一行；另一个的 ON CONFLICT 因 WHERE 不匹配被静默丢弃，`RETURNING` 为空
+  - **建议封装成 Postgres RPC**（`public.try_consume_invite_throttle(email text)` 返回 boolean），让端点代码用 `supabase.rpc('try_consume_invite_throttle', { email })` 一行调用，避免 SQL 散落到 TS 字符串里
+  - IP 级限流（每小时 10 次）第一版用进程内 LRU/Map 即可（Vercel serverless cold-start 会重置，可接受）；若要持久化跨实例，再加一张 `invite_ip_throttle` 表用同样的 atomic UPSERT 模式
+  - 超限返回 429 `THROTTLED`
 - **响应统一 opaque**（round-3 加固）：除了团队密码错（400 `WRONG_TEAM_PASSWORD`）和限流（429）以外，**无论内部状态如何，统一返回 200 `{ message: "如果该邮箱可重发，我们已发送邀请" }`**——不暴露邮箱是否已注册、是否已 setup
-- 内部分支处理：
+- 内部分支处理（**限流原子检查必须在分支判断之前**——避免"用户不存在"分支也能无限发起 listUsers 调用消耗 Supabase 配额）：
+  - 先调 `try_consume_invite_throttle(email)`，false → 429 `THROTTLED`
   - 用 service_role 查 `auth.admin.listUsers` 找出该 email 对应用户：
     - 不存在 → 内部记 `EMAIL_NOT_FOUND`，对外 200 opaque
     - `user_metadata.password_set === true` → 内部记 `ALREADY_SETUP`，对外 200 opaque
@@ -321,8 +373,9 @@ window.history.replaceState({}, "", window.location.pathname);
   - `display_name` 从已存在的 `user_metadata.display_name` 取，**不接受客户端传入**
   - 调 `admin.inviteUserByEmail(email, { data: { display_name }, redirectTo: ${SITE_URL}/auth/callback })`
   - **重新覆写** `app_metadata.team_pass_verified=true`（兼任孤儿账号修复路径）
-  - 写入 invite_throttle.last_sent_at = now
   - 返回 200 opaque
+
+> **限流副作用说明**：上述顺序意味着即便用户邮箱不存在或已 setup，每次请求**也会消耗一次邮箱级冷却配额**。这是 opaque 设计的代价——若先判断分支再决定是否限流，攻击者可借响应延迟差推断邮箱状态。第一版接受此副作用（10 人内部团队，限流配额对真用户无感）。
 
 **为什么对已 setup 用户也 opaque**：避免成为邮箱探测器（"输入邮箱看返回不同 → 推断该邮箱是否注册"）。10 人内部团队这层泄漏低危，但成本几乎为零。
 **为什么不允许已 setup 用户实际重发**：邀请链接包含一个有效的 access_token，对已设密码的账户发等于绕过密码登录。维持只对 password_set=false 的用户实际重发的语义，opaque 响应只是把这个分支隐藏起来。
@@ -340,6 +393,10 @@ window.history.replaceState({}, "", window.location.pathname);
   - 已存在 / `password_set=false`（任一 flag 状态）→ 400 `EMAIL_PENDING`，引导前端走 resend-invite
   - 不存在 → 走下面的创建流程
 - `admin.inviteUserByEmail(email, { data: { display_name }, redirectTo: ${SITE_URL}/auth/callback })`
+- **TOCTOU 兜底（P1 round-4 修复）**：上面的 listUsers 检查与 inviteUserByEmail 不在同一事务里，两个并发同邮箱 signup 都可能看到"不存在"然后都尝试 invite。Supabase Auth 在第二个调用时会返回 duplicate-user 错误（错误形态：`AuthApiError` `code: 'email_exists'` / `status: 422` / message 包含 `User already registered`，跨版本可能微调，**实施时必须实测当前 supabase-js 版本的精确错误形态并加测试夹具**）。捕获该错误后 **不要直接回 500**，而是：
+  1. 用 `admin.listUsers({ email })` 重新拉一次，拿到现行 `password_set` / `team_pass_verified` 状态
+  2. 按 §4.1.1 状态机映射：`password_set=true` → 400 `EMAIL_TAKEN`；`password_set=false` → 400 `EMAIL_PENDING`（孤儿/中间态都归 PENDING，让前端引导 resend-invite）
+  3. 拉取失败（极小概率）→ 500 `SIGNUP_RACE`，日志记够诊断信息
 - 立即 `admin.updateUserById(newUser.id, { app_metadata: { team_pass_verified: true } })`
 - **若 updateUserById 失败：调 `admin.deleteUser(newUser.id)` 回滚，返回 500 `INVITE_FAILED`**（避免留下"被邀请但永远 setup 不通"的孤儿账号）
 - 返回 200 `{ message }` 或上面映射的错误
@@ -354,8 +411,9 @@ window.history.replaceState({}, "", window.location.pathname);
      - `is_admin = ADMIN_EMAILS.includes(email)`
   2. 仅当 `user.user_metadata.password_set !== true` 时，才调
      `admin.updateUserById(user.id, { password, user_metadata: { ...existing, password_set: true } })`
-- 返回 200 `{ user_summary }`
-- **幂等性**：若用户因任何原因已有 `password_set=true` 但缺 profile，第 1 步补齐 profile，第 2 步跳过；后续 login 即可正常使用
+  3. **撤销邀请 session（round-4 修复，详见 §4.1.2）**：调 `admin.signOut(user.id, 'global')`，失败仅记日志
+- 返回 200 `{ user_summary, requires_relogin: true }`
+- **可自愈状态的精确边界**（P2 round-4 澄清）：setup-account 只能修复"`team_pass_verified=true` AND `password_set=true` AND profile 缺失"这一种孤儿状态——第 1 步补 profile，第 2 步因 password_set 已 true 跳过，第 3 步签出。**任何 `team_pass_verified=false` 的孤儿/损坏数据**（即便 password_set=true 或 profile 已部分写入），setup-account 一律返回 403 `BYPASS_ATTEMPT`，必须由 resend-invite 顺手覆写 flag 后才能再走 setup，或由管理员从 Supabase 控制台手动修复。这条边界防止 setup-account 自身变成绕过路径的恢复点
 
 **`api/auth/login.ts`**
 - POST `{ email, password }`
@@ -566,6 +624,30 @@ do $$ begin
       for all to service_role using (true) with check (true);
   end if;
 end $$;
+
+-- 5b) 原子 check-and-set RPC（round-4 加固，见 §4.7）
+-- 单条 INSERT ... ON CONFLICT DO UPDATE ... WHERE 在 Postgres 内
+-- 原子完成"读旧时间 + 判冷却 + 写新时间"，避免并发 resend 双发邀请
+create or replace function public.try_consume_invite_throttle(p_email text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text;
+begin
+  insert into public.invite_throttle (email, last_sent_at)
+  values (p_email, now())
+  on conflict (email) do update
+    set last_sent_at = now()
+    where invite_throttle.last_sent_at < now() - interval '60 seconds'
+  returning email into v_email;
+  return v_email is not null;
+end;
+$$;
+revoke all on function public.try_consume_invite_throttle(text) from public, anon, authenticated;
+grant execute on function public.try_consume_invite_throttle(text) to service_role;
 -- 不在 SQL 里硬编码管理员邮箱，由 setup-account 端点判断
 ```
 
@@ -595,7 +677,8 @@ Vercel 环境变量：`ADMIN_EMAILS=19338106204@163.com`（多个用逗号分隔
 | 场景 | 行为 |
 |---|---|
 | 注册时 team_password 错 | 400 `WRONG_TEAM_PASSWORD` |
-| 注册时邮箱已存在 | 400 `EMAIL_TAKEN`，提示"邮箱已注册，请直接登录或重发邀请" |
+| 注册时邮箱已注册且已完成 setup（password_set=true） | 400 `EMAIL_TAKEN`，前端提示"邮箱已注册，请直接登录" |
+| 注册时邮箱已被邀请但未完成 setup（password_set=false） | 400 `EMAIL_PENDING`，前端提示"该邮箱已发出邀请，请去邮箱查收，或点'重发邀请'"（按钮调 §4.7） |
 | 登录时邮箱未验证 | 401 `EMAIL_NOT_VERIFIED`，UI 显示"重新发送验证邮件"按钮（调 §4.7） |
 | 登录时密码错 | 401 `INVALID_CREDENTIALS` |
 | access_token 过期 | 401 → 前端 refresh → 重试一次 |
@@ -608,11 +691,15 @@ Vercel 环境变量：`ADMIN_EMAILS=19338106204@163.com`（多个用逗号分隔
 ## 9. 测试要求
 
 后端测试（`tests/api/auth.test.ts` 新建）：
-- signup：team_password 错 → 400；邮箱已存在 → 400；正常 → 200 + admin.inviteUserByEmail 被调用 + app_metadata 写入
-- setup-account：缺 team_pass_verified → 403；token 无效 → 401；正常 → 200 + 创建 profile + ADMIN_EMAILS 命中 → is_admin=true
+- signup：team_password 错 → 400；邮箱已存在且 password_set=true → 400 `EMAIL_TAKEN`；已存在但 password_set=false → 400 `EMAIL_PENDING`；正常 → 200 + admin.inviteUserByEmail 被调用 + app_metadata 写入
+- signup TOCTOU（round-4）：mock listUsers 返回不存在但 inviteUserByEmail 抛 duplicate-user 错（夹具用 supabase-js 实测的精确错误形态）→ 端点必须返回 400 `EMAIL_PENDING` 或 `EMAIL_TAKEN`，**不能 500**
+- setup-account：缺 team_pass_verified → 403；token 无效 → 401；正常 → 200 + 创建 profile + ADMIN_EMAILS 命中 → is_admin=true + `requires_relogin: true`
+- setup-account 邀请 session 撤销（round-4）：成功路径下 `admin.signOut(user.id, 'global')` 必须被调用一次；mock signOut 抛错 → 端点仍返回 200（仅记日志）
+- setup-account 自愈分支边界（round-4）：`team_pass_verified=true / password_set=true / profile 缺失` → 200 自愈；`team_pass_verified=false / password_set=true / profile 缺失` → 403 `BYPASS_ATTEMPT`（不能借此自愈）
 - login：未验证邮箱 → 401 `EMAIL_NOT_VERIFIED`；密码错 → 401；正常 → 200
 - me：无 token → 401；有 token → 返回 user info
-- resend-invite：team_password 错 → 400；正常 → 200
+- resend-invite：team_password 错 → 400；冷却期内重发 → 429 `THROTTLED`；正常 → 200
+- resend-invite 原子限流（round-4）：两次并发同邮箱调用，`try_consume_invite_throttle` 必须仅返回一次 true（用 Promise.all + 真 Postgres 测；纯 mock 测不出原子性）；inviteUserByEmail 仅被调一次
 
 业务测试改造：
 - 删除所有 viewer query 参数测试
@@ -817,3 +904,14 @@ fi
 | 3 | P1 | resend-invite 缺限流 + 内部状态从响应泄漏 | §4.7 加每邮箱 60s 冷却 + 每 IP 每小时 10 次上限（`invite_throttle` 表追踪）；响应统一 opaque 200 message，内部分支 EMAIL_NOT_FOUND / ALREADY_SETUP 不暴露给客户端；§7.1 在 Migration 006 加 invite_throttle 表 |
 | 4 | P2 | lint:env grep 仍挡不住动态拼接 | §12.4.1 新增 residual risk 段落，明确接受这些极端形态作为 best-effort 边界；指出第二版升级到 ESLint AST custom rule（仅允许 `import.meta.env.VITE_*`，禁 `process.env` / `eval`）作为静态拦截 |
 | 5 | P2 | profile/update 静默忽略敏感字段不如 strict reject | §5.1 改为 Zod strict schema 仅允许 `display_name`，携带 `is_admin/email/id` / 任意未知字段返回 400 `Invalid payload`；与 Phase 1 prompts/examples strict 风格一致 |
+
+## 附录 D：codex 第 4 轮反馈处理记录
+
+| # | 优先级 | 反馈 | 处理 |
+|---|---|---|---|
+| 1 | P1 | setup 完成后旧 invite token 可升级成业务 token（profile + password_set 翻 true 后，邀请链接里的 access_token 在 TTL 内仍能过 authenticate） | §4.1 流程图末尾加"撤销邀请 session"步骤；新增 §4.1.2 专节展开：setup-account 第 3 步 service_role 调 `admin.signOut(user.id, 'global')`；返回体加 `requires_relogin: true`；前端 AuthCallback 收到后必须本地 signOut + 跳登录页用新密码重 login；access_token TTL 残留窗口（默认 1 小时）作为第一版 trade-off 明示，第二版升级路径列出（缩短 TTL / 给 invite token 加标记） |
+| 2 | P1 | invite_throttle 不是并发安全限流（先 SELECT 再 UPDATE 在并发下双发邀请） | §4.7 改为单条 `INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING` 原子 check-and-set，封装成 Postgres RPC `try_consume_invite_throttle(email)` 返回 boolean；§7.1 Migration 006 加 RPC 定义、权限只授 service_role；§4.7 内部分支处理顺序明确为"先消耗限流配额再 listUsers"，避免因分支判断绕过限流；测试加并发用例验真 Postgres 原子性 |
+| 3 | P1 | signup 的 listUsers → inviteUserByEmail 存在 TOCTOU（两个并发同邮箱都看到不存在然后双 invite，错误形态未定义） | §5.1 signup 端点加兜底：捕获 inviteUserByEmail 的 duplicate-user 错误（实施时实测当前 supabase-js 精确错误形态并落测试夹具）→ 重新 listUsers → 按 §4.1.1 状态机映射到 `EMAIL_PENDING` / `EMAIL_TAKEN`，不直接 500；§9 加 TOCTOU 专项测试 |
+| 4 | P1 | password_set 元数据更新后 token freshness 未闭环（前端可能用旧 session 触发 401/循环） | 与 #1 同步处理：`requires_relogin: true` 明确告知前端不要复用 invite session；前端在 setup 200 后立即 signOut + 跳登录页，等价于强制 token 全量刷新（拿密码登录 session 而不是被动 refreshSession） |
+| 5 | P2 | "profile 缺失但 password_set=true" 自愈条件不精确，可能与 team_pass_verified 缺失冲突 | §4.1 幂等恢复段落 + §5.1 setup-account 项加约束："team_pass_verified=true AND password_set=true AND profile 缺失"才允许 setup-account 自愈；缺 flag 的孤儿账号一律 403，必须走 resend-invite（顺手覆写 flag）或管理员手动修复；§9 加自愈分支边界测试 |
+| 6 | P2 | §8 错误表把重复邮箱统一成 EMAIL_TAKEN，与 §4.1.1 状态机不一致 | §8 拆成两行：`password_set=true` → `EMAIL_TAKEN`（提示直接登录）；`password_set=false` → `EMAIL_PENDING`（提示查收/重发邀请） |
