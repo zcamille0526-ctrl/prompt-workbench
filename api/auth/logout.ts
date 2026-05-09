@@ -34,7 +34,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (accessToken) {
     try {
-      await supabase.auth.admin.signOut(accessToken, "global");
+      // scope='local' invalidates only this session's refresh token. spec
+      // §13 "multi-device login: logging out one place does not affect
+      // others" — a previous draft used 'global' which contradicted that.
+      // setup-account is the only path that needs 'global' (revoking the
+      // invite session everywhere).
+      await supabase.auth.admin.signOut(accessToken, "local");
     } catch {
       // logged-only — frontend will still clear local session
       safeLog({ endpoint: ENDPOINT, method: "POST", status: 200, errorCode: "SIGNOUT_FAILED" });

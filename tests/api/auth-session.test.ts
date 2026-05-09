@@ -194,13 +194,18 @@ describe("/api/auth/refresh", () => {
 });
 
 describe("/api/auth/logout", () => {
-  it("calls admin.signOut with bearer token, returns 200", async () => {
+  it("calls admin.signOut with bearer token + 'local' scope, returns 200", async () => {
     bag.signOut.mockResolvedValue({ error: null });
     const req = makeReq({ body: {}, authorization: "Bearer AT" });
     const res = makeRes();
     await logout(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(200);
-    expect(bag.signOut).toHaveBeenCalledWith("AT", "global");
+    expect(bag.signOut).toHaveBeenCalledTimes(1);
+    expect(bag.signOut.mock.calls[0][0]).toBe("AT");
+    // Critical anti-regression: logout must use 'local', NOT 'global'.
+    // 'global' would kill the user's other devices (spec §13 multi-device).
+    expect(bag.signOut.mock.calls[0][1]).toBe("local");
+    expect(bag.signOut.mock.calls[0][1]).not.toBe("global");
   });
 
   it("tolerates signOut failure and still returns 200", async () => {

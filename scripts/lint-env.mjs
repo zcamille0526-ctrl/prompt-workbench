@@ -9,8 +9,12 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+// fileURLToPath gives a real OS path on every platform — `new URL(..).pathname`
+// returns "/D:/foo" on Windows, which path.join then mangles into something
+// that doesn't exist on disk. Codex caught this in P1-Step1 review.
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SRC = join(ROOT, "src");
 
 const SERVER_ONLY_NAMES = ["SUPABASE_SERVICE_ROLE_KEY", "SHARED_PASSWORD", "ADMIN_EMAILS"];
