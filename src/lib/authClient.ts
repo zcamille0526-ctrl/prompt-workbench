@@ -161,11 +161,33 @@ export async function setupAccount(
   password: string,
   inviteAccessToken: string
 ): Promise<{ user_summary: UserSummary; requires_relogin: boolean }> {
-  return postJson(
+  const data = await postJson<{
+    user_summary: UserSummary;
+    requires_relogin: boolean;
+  }>(
     "/api/auth/setup-account",
     { password },
     { authorization: inviteAccessToken }
   );
+
+  // Self-heal branch: server kept our session valid (didn't run signOut),
+  // and the caller will route us straight into the main app without a
+  // re-login. We need to seed pw.access_token / pw.refresh_token from
+  // supabase-js so the rest of the app — which reads from pw.* — has a
+  // working token. The first-setup branch deliberately skips this: the
+  // caller will signOut, navigate to the login screen, and login() will
+  // populate pw.* with a fresh password-login session.
+  if (!data.requires_relogin) {
+    const session = (await getSupabaseClient().auth.getSession()).data.session;
+    if (session?.access_token && session?.refresh_token) {
+      storeTokens({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      });
+    }
+  }
+
+  return data;
 }
 
 export async function login(input: {
