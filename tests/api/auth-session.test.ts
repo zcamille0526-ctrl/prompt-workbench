@@ -223,6 +223,21 @@ describe("/api/auth/logout", () => {
     expect(res.statusCode).toBe(200);
     expect(bag.signOut).not.toHaveBeenCalled();
   });
+
+  it("ignores request body — anti-spoof: cannot revoke another session via body refresh_token", async () => {
+    bag.signOut.mockResolvedValue({ error: null });
+    const req = makeReq({
+      body: { refresh_token: "victim-refresh-token" },
+      authorization: "Bearer AT",
+    });
+    const res = makeRes();
+    await logout(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
+    // signOut must be called with the Bearer token, NOT the body value.
+    expect(bag.signOut).toHaveBeenCalledTimes(1);
+    expect(bag.signOut.mock.calls[0][0]).toBe("AT");
+    expect(bag.signOut.mock.calls[0][0]).not.toBe("victim-refresh-token");
+  });
 });
 
 describe("/api/auth/me", () => {
