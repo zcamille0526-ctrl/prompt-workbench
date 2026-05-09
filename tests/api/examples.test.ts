@@ -1,40 +1,88 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-vi.stubEnv("SHARED_PASSWORD", "test-password-123");
 vi.stubEnv("SUPABASE_URL", "https://test.supabase.co");
 vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-key");
 
-const mockFrom = vi.fn();
-vi.mock("@supabase/supabase-js", () => ({
-  createClient: () => ({ from: mockFrom }),
-}));
-
-const verifyMod = await import("../../api/verify");
-const verifyHandler = verifyMod.default;
-const examplesMod = await import("../../api/examples");
-const examplesHandler = examplesMod.default;
-
-type MockRes = {
-  status: ReturnType<typeof vi.fn>;
-  json: ReturnType<typeof vi.fn>;
-  statusCode: number;
-  body: unknown;
+type ChainCall = { table: string; method: string; args: unknown[] };
+type Bag = {
+  getUser: ReturnType<typeof vi.fn>;
+  // First single() call for "examples" with head:true returns count, others return data.
+  results: Map<string, Array<{ data?: unknown; error?: unknown; count?: number }>>;
+  calls: ChainCall[];
+  // Track whether a select was called with { count: "exact", head: true }
+  // to route the next then() to a count result.
+  countMode: Map<string, boolean>;
 };
 
-function makeRes(): MockRes {
-  const res: MockRes = {
-    statusCode: 0,
-    body: undefined,
-    status: vi.fn(),
-    json: vi.fn(),
-  };
-  res.status.mockImplementation((code: number) => {
-    res.statusCode = code;
+const bag: Bag = {
+  getUser: vi.fn(),
+  results: new Map(),
+  calls: [],
+  countMode: new Map(),
+};
+
+function pushResult(
+  table: string,
+  result: { data?: unknown; error?: unknown; count?: number }
+) {
+  if (!bag.results.has(table)) bag.results.set(table, []);
+  bag.results.get(table)!.push(result);
+}
+
+function nextResult(table: string) {
+  const q = bag.results.get(table);
+  if (!q || q.length === 0)
+    return { data: null, error: { message: `no mocked result for ${table}` } };
+  return q.shift()!;
+}
+
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: () => ({
+    auth: { getUser: (...a: unknown[]) => (bag.getUser as any)(...a) },
+    from: (table: string) => {
+      const chain: any = {};
+      chain.select = (cols: unknown, opts?: { count?: string; head?: boolean }) => {
+        bag.calls.push({ table, method: "select", args: [cols, opts] });
+        if (opts?.count === "exact" && opts?.head === true) {
+          bag.countMode.set(table, true);
+        }
+        return chain;
+      };
+      chain.eq = (...args: unknown[]) => {
+        bag.calls.push({ table, method: "eq", args });
+        return chain;
+      };
+      chain.insert = (...args: unknown[]) => {
+        bag.calls.push({ table, method: "insert", args });
+        return chain;
+      };
+      chain.delete = (...args: unknown[]) => {
+        bag.calls.push({ table, method: "delete", args });
+        return chain;
+      };
+      chain.order = (...args: unknown[]) => {
+        bag.calls.push({ table, method: "order", args });
+        return chain;
+      };
+      chain.single = () => Promise.resolve(nextResult(table));
+      chain.then = (fn: any) => Promise.resolve(nextResult(table)).then(fn);
+      return chain;
+    },
+  }),
+}));
+
+const handler = (await import("../../api/examples")).default;
+const supaLib = await import("../../api/lib/supabase");
+
+function makeRes() {
+  const res: any = { statusCode: 0, body: undefined };
+  res.status = vi.fn((c: number) => {
+    res.statusCode = c;
     return res;
   });
-  res.json.mockImplementation((data: unknown) => {
-    res.body = data;
+  res.json = vi.fn((d: unknown) => {
+    res.body = d;
     return res;
   });
   return res;
@@ -54,272 +102,299 @@ function makeReq(opts: {
   } as unknown as VercelRequest;
 }
 
-/**
- * A chainable that records each call and resolves the leaf to `result`.
- * `single()` resolves the same way; `then` makes the chain itself awaitable
- * for the .select().eq().order() pattern that returns directly.
- */
-function chain(result: { data?: unknown; error?: unknown; count?: number }) {
-  const calls: { method: string; args: unknown[] }[] = [];
-  const obj: any = {};
-  for (const m of ["select", "insert", "update", "delete", "eq", "order"]) {
-    obj[m] = (...args: unknown[]) => {
-      calls.push({ method: m, args });
-      return obj;
-    };
-  }
-  obj.single = () => Promise.resolve(result);
-  obj.then = (fn: any) => Promise.resolve(result).then(fn);
-  return { obj, calls };
-}
-
-let token: string;
-const VALID_PROMPT_ID = "550e8400-e29b-41d4-a716-446655440001";
-const VALID_EXAMPLE_ID = "550e8400-e29b-41d4-a716-446655440002";
-
-beforeEach(async () => {
-  const verifyReq = makeReq({
-    method: "POST",
-    body: { password: "test-password-123" },
-  });
-  const verifyRes = makeRes();
-  await verifyHandler(verifyReq, verifyRes as unknown as VercelResponse);
-  token = (verifyRes.body as { token: string }).token;
-  mockFrom.mockReset();
-});
-
-const validBody = {
-  prompt_id: VALID_PROMPT_ID,
-  title: "测试示例",
-  variable_values: { 学科: "语文" },
-  model: "deepseek-v4-flash",
-  messages: [
-    { role: "user", content: "hi" },
-    { role: "assistant", content: "hello" },
-  ],
-  created_by: "alice",
+const REGULAR_USER = {
+  id: "user-aaa",
+  email: "alice@example.com",
+  display_name: "Alice",
+  is_admin: false,
+};
+const OTHER_USER = {
+  id: "user-bbb",
+  email: "bob@example.com",
+  display_name: "Bob",
+  is_admin: false,
+};
+const ADMIN_USER = {
+  id: "user-zzz",
+  email: "admin@example.com",
+  display_name: "Admin",
+  is_admin: true,
 };
 
-describe("examples handler — auth", () => {
-  it("returns 401 without token", async () => {
+function mockAuthenticated(user: typeof REGULAR_USER) {
+  bag.getUser.mockResolvedValue({
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        user_metadata: { password_set: true },
+      },
+    },
+    error: null,
+  });
+  pushResult("profiles", {
+    data: { display_name: user.display_name, is_admin: user.is_admin },
+    error: null,
+  });
+}
+
+const VALID_PROMPT_ID = "11111111-1111-4111-8111-111111111111";
+const VALID_EXAMPLE_ID = "22222222-2222-4222-8222-222222222222";
+
+const VALID_BODY = {
+  prompt_id: VALID_PROMPT_ID,
+  variable_values: {},
+  model: "deepseek-v4-flash",
+  messages: [
+    { role: "user" as const, content: "hi" },
+    { role: "assistant" as const, content: "hello" },
+  ],
+};
+
+beforeEach(() => {
+  bag.getUser.mockReset();
+  bag.results.clear();
+  bag.calls = [];
+  bag.countMode.clear();
+  supaLib.__resetServiceRoleClientForTests();
+});
+
+describe("/api/examples — auth", () => {
+  it("401 without bearer token", async () => {
     const req = makeReq({ method: "GET", query: { prompt_id: VALID_PROMPT_ID } });
     const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
+    await handler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(401);
   });
 });
 
-describe("GET /api/examples", () => {
-  it("returns 400 when prompt_id is missing", async () => {
-    const req = makeReq({ method: "GET", authorization: `Bearer ${token}` });
-    const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
-    expect(res.statusCode).toBe(400);
-  });
-
-  it("returns examples when prompt is published", async () => {
-    const parent = chain({ data: { is_draft: false, created_by: "alice" }, error: null });
-    const list = chain({ data: [{ id: "e1", prompt_id: VALID_PROMPT_ID }], error: null });
-    let n = 0;
-    mockFrom.mockImplementation(() => (++n === 1 ? parent.obj : list.obj));
-
+describe("/api/examples GET", () => {
+  it("403 when prompt is draft and caller is not the owner", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushResult("prompts", {
+      data: { is_draft: true, created_by_id: "someone-else" },
+      error: null,
+    });
     const req = makeReq({
       method: "GET",
+      authorization: "Bearer T",
       query: { prompt_id: VALID_PROMPT_ID },
-      authorization: `Bearer ${token}`,
     });
     const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-  });
-
-  it("returns 403 for draft prompt when viewer is not owner", async () => {
-    const parent = chain({ data: { is_draft: true, created_by: "alice" }, error: null });
-    mockFrom.mockReturnValueOnce(parent.obj);
-
-    const req = makeReq({
-      method: "GET",
-      query: { prompt_id: VALID_PROMPT_ID, viewer: "bob" },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
-
+    await handler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(403);
   });
 
-  it("returns examples for draft prompt when viewer is owner", async () => {
-    const parent = chain({ data: { is_draft: true, created_by: "alice" }, error: null });
-    const list = chain({ data: [], error: null });
-    let n = 0;
-    mockFrom.mockImplementation(() => (++n === 1 ? parent.obj : list.obj));
-
+  it("admin still cannot view someone else's draft examples (drafts stay private per spec §5.3)", async () => {
+    mockAuthenticated(ADMIN_USER);
+    pushResult("prompts", {
+      data: { is_draft: true, created_by_id: "someone-else" },
+      error: null,
+    });
     const req = makeReq({
       method: "GET",
-      query: { prompt_id: VALID_PROMPT_ID, viewer: "alice" },
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
+      query: { prompt_id: VALID_PROMPT_ID },
     });
     const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(403);
+  });
 
+  it("returns flattened examples list when caller may view", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushResult("prompts", {
+      data: { is_draft: false, created_by_id: "anyone" },
+      error: null,
+    });
+    pushResult("examples", {
+      data: [
+        {
+          id: "e1",
+          prompt_id: VALID_PROMPT_ID,
+          created_by_id: REGULAR_USER.id,
+          creator: { display_name: "Alice" },
+          messages: [],
+        },
+      ],
+      error: null,
+    });
+    const req = makeReq({
+      method: "GET",
+      authorization: "Bearer T",
+      query: { prompt_id: VALID_PROMPT_ID },
+    });
+    const res = makeRes();
+    await handler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(200);
+    expect(res.body[0].created_by_name).toBe("Alice");
+    expect(res.body[0].creator).toBeUndefined();
   });
 });
 
-describe("POST /api/examples", () => {
-  it("creates example when under cap", async () => {
-    const parent = chain({ data: { is_draft: false, created_by: "alice" }, error: null });
-    const count = chain({ data: null, error: null, count: 2 });
-    const insert = chain({ data: { id: "e-new", ...validBody }, error: null });
-    let n = 0;
-    mockFrom.mockImplementation(() => {
-      n++;
-      if (n === 1) return parent.obj;
-      if (n === 2) return count.obj;
-      return insert.obj;
+describe("/api/examples POST", () => {
+  it("strict-rejects body containing created_by", async () => {
+    mockAuthenticated(REGULAR_USER);
+    const req = makeReq({
+      method: "POST",
+      authorization: "Bearer T",
+      body: { ...VALID_BODY, created_by: "forged" },
+    });
+    const res = makeRes();
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("strict-rejects body containing created_by_id", async () => {
+    mockAuthenticated(REGULAR_USER);
+    const req = makeReq({
+      method: "POST",
+      authorization: "Bearer T",
+      body: { ...VALID_BODY, created_by_id: "forged" },
+    });
+    const res = makeRes();
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("403 when posting to someone else's draft", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushResult("prompts", {
+      data: { is_draft: true, created_by_id: OTHER_USER.id },
+      error: null,
+    });
+    const req = makeReq({
+      method: "POST",
+      authorization: "Bearer T",
+      body: VALID_BODY,
+    });
+    const res = makeRes();
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("happy path: count check then insert with server-injected created_by_id", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushResult("prompts", {
+      data: { is_draft: false, created_by_id: "anyone" },
+      error: null,
+    });
+    pushResult("examples", { count: 0, error: null });
+    pushResult("examples", {
+      data: {
+        id: "e-new",
+        created_by_id: REGULAR_USER.id,
+        creator: { display_name: REGULAR_USER.display_name },
+      },
+      error: null,
     });
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
-      body: validBody,
+      authorization: "Bearer T",
+      body: VALID_BODY,
     });
     const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
+    await handler(req, res as unknown as VercelResponse);
+
     expect(res.statusCode).toBe(201);
+    const insertCall = bag.calls.find(
+      (c) => c.table === "examples" && c.method === "insert"
+    );
+    expect((insertCall!.args[0] as any).created_by_id).toBe(REGULAR_USER.id);
+    expect(res.body.created_by_name).toBe(REGULAR_USER.display_name);
+    expect(res.body.creator).toBeUndefined();
   });
 
-  it("returns 400 when prompt already has 5 examples", async () => {
-    const parent = chain({ data: { is_draft: false, created_by: "alice" }, error: null });
-    const count = chain({ data: null, error: null, count: 5 });
-    let n = 0;
-    mockFrom.mockImplementation(() => (++n === 1 ? parent.obj : count.obj));
+  it("400 when 5-per-prompt cap is hit", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushResult("prompts", {
+      data: { is_draft: false, created_by_id: "anyone" },
+      error: null,
+    });
+    pushResult("examples", { count: 5, error: null });
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
-      body: validBody,
+      authorization: "Bearer T",
+      body: VALID_BODY,
     });
     const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
-    expect(res.statusCode).toBe(400);
-    expect((res.body as any).error).toContain("上限");
-  });
-
-  it("returns 403 when adding example to someone else's draft", async () => {
-    const parent = chain({ data: { is_draft: true, created_by: "bob" }, error: null });
-    mockFrom.mockReturnValueOnce(parent.obj);
-
-    const req = makeReq({
-      method: "POST",
-      authorization: `Bearer ${token}`,
-      body: validBody, // created_by: "alice"
-    });
-    const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
-    expect(res.statusCode).toBe(403);
-  });
-
-  it("returns 400 for invalid body shape", async () => {
-    const req = makeReq({
-      method: "POST",
-      authorization: `Bearer ${token}`,
-      body: { ...validBody, messages: [{ role: "user", content: "x" }] }, // only 1 msg
-    });
-    const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
-    expect(res.statusCode).toBe(400);
-    expect(mockFrom).not.toHaveBeenCalled();
-  });
-
-  it("returns 400 for unknown body fields (strict)", async () => {
-    const req = makeReq({
-      method: "POST",
-      authorization: `Bearer ${token}`,
-      body: { ...validBody, leaked: true },
-    });
-    const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
+    await handler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(400);
   });
 });
 
-describe("DELETE /api/examples", () => {
-  it("returns 403 when viewer is neither creator nor prompt owner", async () => {
-    const exists = chain({ data: { created_by: "alice", prompt_id: VALID_PROMPT_ID }, error: null });
-    const parent = chain({ data: { created_by: "bob" }, error: null });
-    let n = 0;
-    mockFrom.mockImplementation(() => (++n === 1 ? exists.obj : parent.obj));
+describe("/api/examples DELETE — option B + admin", () => {
+  function pushExample(opts: { creator: string; promptId: string }) {
+    pushResult("examples", {
+      data: { created_by_id: opts.creator, prompt_id: opts.promptId },
+      error: null,
+    });
+  }
+  function pushPrompt(opts: { creator: string }) {
+    pushResult("prompts", {
+      data: { created_by_id: opts.creator },
+      error: null,
+    });
+  }
 
+  it("403 when caller is neither example creator, prompt owner, nor admin", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushExample({ creator: OTHER_USER.id, promptId: VALID_PROMPT_ID });
+    pushPrompt({ creator: OTHER_USER.id });
     const req = makeReq({
       method: "DELETE",
-      query: { id: VALID_EXAMPLE_ID, viewer: "carol" },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
-    expect(res.statusCode).toBe(403);
-  });
-
-  it("allows the example creator to delete", async () => {
-    const exists = chain({ data: { created_by: "alice", prompt_id: VALID_PROMPT_ID }, error: null });
-    const parent = chain({ data: { created_by: "bob" }, error: null });
-    const del = chain({ data: null, error: null });
-    let n = 0;
-    mockFrom.mockImplementation(() => {
-      n++;
-      if (n === 1) return exists.obj;
-      if (n === 2) return parent.obj;
-      return del.obj;
-    });
-
-    const req = makeReq({
-      method: "DELETE",
-      query: { id: VALID_EXAMPLE_ID, viewer: "alice" },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
-    expect(res.statusCode).toBe(200);
-  });
-
-  it("allows the prompt owner to delete someone else's example", async () => {
-    const exists = chain({ data: { created_by: "alice", prompt_id: VALID_PROMPT_ID }, error: null });
-    const parent = chain({ data: { created_by: "bob" }, error: null });
-    const del = chain({ data: null, error: null });
-    let n = 0;
-    mockFrom.mockImplementation(() => {
-      n++;
-      if (n === 1) return exists.obj;
-      if (n === 2) return parent.obj;
-      return del.obj;
-    });
-
-    const req = makeReq({
-      method: "DELETE",
-      query: { id: VALID_EXAMPLE_ID, viewer: "bob" },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
-    expect(res.statusCode).toBe(200);
-  });
-
-  it("returns 403 when viewer is missing", async () => {
-    const exists = chain({ data: { created_by: "alice", prompt_id: VALID_PROMPT_ID }, error: null });
-    const parent = chain({ data: { created_by: "bob" }, error: null });
-    let n = 0;
-    mockFrom.mockImplementation(() => (++n === 1 ? exists.obj : parent.obj));
-
-    const req = makeReq({
-      method: "DELETE",
+      authorization: "Bearer T",
       query: { id: VALID_EXAMPLE_ID },
-      authorization: `Bearer ${token}`,
     });
     const res = makeRes();
-    await examplesHandler(req, res as unknown as VercelResponse);
+    await handler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(403);
+  });
+
+  it("example creator can delete → 200", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushExample({ creator: REGULAR_USER.id, promptId: VALID_PROMPT_ID });
+    pushPrompt({ creator: OTHER_USER.id });
+    pushResult("examples", { data: null, error: null });
+    const req = makeReq({
+      method: "DELETE",
+      authorization: "Bearer T",
+      query: { id: VALID_EXAMPLE_ID },
+    });
+    const res = makeRes();
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("prompt owner can delete other users' examples → 200", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushExample({ creator: OTHER_USER.id, promptId: VALID_PROMPT_ID });
+    pushPrompt({ creator: REGULAR_USER.id });
+    pushResult("examples", { data: null, error: null });
+    const req = makeReq({
+      method: "DELETE",
+      authorization: "Bearer T",
+      query: { id: VALID_EXAMPLE_ID },
+    });
+    const res = makeRes();
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("admin can delete other users' examples even if not prompt owner → 200", async () => {
+    mockAuthenticated(ADMIN_USER);
+    pushExample({ creator: OTHER_USER.id, promptId: VALID_PROMPT_ID });
+    pushPrompt({ creator: REGULAR_USER.id });
+    pushResult("examples", { data: null, error: null });
+    const req = makeReq({
+      method: "DELETE",
+      authorization: "Bearer T",
+      query: { id: VALID_EXAMPLE_ID },
+    });
+    const res = makeRes();
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
   });
 });

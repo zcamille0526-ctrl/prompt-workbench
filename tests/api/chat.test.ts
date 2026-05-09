@@ -1,12 +1,29 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-vi.stubEnv("SHARED_PASSWORD", "test-password-123");
+vi.stubEnv("SUPABASE_URL", "https://test.supabase.co");
+vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-key");
 
-const verifyMod = await import("../../api/verify");
-const verifyHandler = verifyMod.default;
-const chatMod = await import("../../api/chat");
-const chatHandler = chatMod.default;
+const bag = {
+  getUser: vi.fn(),
+  profileLookup: { data: null as unknown, error: null as unknown },
+};
+
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: () => ({
+    auth: { getUser: (...a: unknown[]) => (bag.getUser as any)(...a) },
+    from: () => {
+      const c: any = {};
+      c.select = () => c;
+      c.eq = () => c;
+      c.single = () => Promise.resolve(bag.profileLookup);
+      return c;
+    },
+  }),
+}));
+
+const chatHandler = (await import("../../api/chat")).default;
+const supaLib = await import("../../api/lib/supabase");
 
 type MockRes = {
   status: ReturnType<typeof vi.fn>;
@@ -46,18 +63,31 @@ function makeReq(opts: {
   } as unknown as VercelRequest;
 }
 
-let token: string;
 let originalFetch: typeof fetch;
 
-beforeEach(async () => {
-  const verifyReq = makeReq({
-    method: "POST",
-    body: { password: "test-password-123" },
+function mockAuthOk() {
+  bag.getUser.mockResolvedValue({
+    data: {
+      user: {
+        id: "u1",
+        email: "x@y.com",
+        user_metadata: { password_set: true },
+      },
+    },
+    error: null,
   });
-  const verifyRes = makeRes();
-  await verifyHandler(verifyReq, verifyRes as unknown as VercelResponse);
-  token = (verifyRes.body as { token: string }).token;
+  bag.profileLookup = {
+    data: { display_name: "X", is_admin: false },
+    error: null,
+  };
+}
+
+beforeEach(() => {
+  bag.getUser.mockReset();
+  bag.profileLookup = { data: null, error: null };
+  supaLib.__resetServiceRoleClientForTests();
   originalFetch = globalThis.fetch;
+  mockAuthOk();
 });
 
 afterEach(() => {
@@ -78,8 +108,19 @@ describe("POST /api/chat", () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it("returns 401 when password_set=false", async () => {
+    bag.getUser.mockResolvedValue({
+      data: { user: { id: "x", email: "x@y.com", user_metadata: {} } },
+      error: null,
+    });
+    const req = makeReq({ method: "POST", body: validBody, authorization: "Bearer T" });
+    const res = makeRes();
+    await chatHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(401);
+  });
+
   it("returns 405 for non-POST", async () => {
-    const req = makeReq({ method: "GET", authorization: `Bearer ${token}` });
+    const req = makeReq({ method: "GET", authorization: "Bearer T" });
     const res = makeRes();
     await chatHandler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(405);
@@ -88,7 +129,7 @@ describe("POST /api/chat", () => {
   it("returns 400 for missing apiKey", async () => {
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: { model: "deepseek-v4-flash", messages: [{ role: "user", content: "hi" }] },
     });
     const res = makeRes();
@@ -99,7 +140,7 @@ describe("POST /api/chat", () => {
   it("returns 400 for invalid model", async () => {
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: { ...validBody, model: "gpt-4" },
     });
     const res = makeRes();
@@ -110,7 +151,7 @@ describe("POST /api/chat", () => {
   it("returns 400 for empty messages array", async () => {
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: { ...validBody, messages: [] },
     });
     const res = makeRes();
@@ -121,7 +162,7 @@ describe("POST /api/chat", () => {
   it("returns 400 for unknown body fields (strict)", async () => {
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: { ...validBody, temperature: 0.5 },
     });
     const res = makeRes();
@@ -146,7 +187,7 @@ describe("POST /api/chat", () => {
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: validBody,
     });
     const res = makeRes();
@@ -169,7 +210,7 @@ describe("POST /api/chat", () => {
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: validBody,
     });
     const res = makeRes();
@@ -188,7 +229,7 @@ describe("POST /api/chat", () => {
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: validBody,
     });
     const res = makeRes();
@@ -207,7 +248,7 @@ describe("POST /api/chat", () => {
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: validBody,
     });
     const res = makeRes();
@@ -228,7 +269,7 @@ describe("POST /api/chat", () => {
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: validBody,
     });
     const res = makeRes();
@@ -247,7 +288,7 @@ describe("POST /api/chat", () => {
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: validBody,
     });
     const res = makeRes();
@@ -277,7 +318,6 @@ function mockStreamingRes() {
       end: vi.fn(() => {
         ended = true;
       }),
-      // Fallbacks in case the streaming branch is unexpectedly bypassed
       status: vi.fn(function (this: any, code: number) {
         this.statusCode = code;
         return this;
@@ -291,8 +331,6 @@ function mockStreamingRes() {
 }
 
 function streamFromChunks(rawChunks: string[]) {
-  // Build a ReadableStream-like object with a getReader() compatible with the
-  // handler's `for await` loop. Returns Uint8Array chunks.
   const enc = new TextEncoder();
   let i = 0;
   return {
@@ -323,7 +361,7 @@ describe("POST /api/chat — streaming", () => {
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: { ...validBody, stream: true },
     });
     const r = mockStreamingRes();
@@ -346,7 +384,7 @@ describe("POST /api/chat — streaming", () => {
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: { ...validBody, stream: true },
     });
     const res = makeRes();

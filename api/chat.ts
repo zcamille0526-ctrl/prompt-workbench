@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { z } from "zod";
-import { verifyToken } from "./verify.js";
+import { authenticate } from "./lib/auth.js";
 import { safeLog } from "./lib/log.js";
 
 // 30 s aligns with Vercel Pro's maxDuration ceiling. On Hobby plans this
@@ -45,12 +45,6 @@ type ErrorCode =
   | "NETWORK"
   | "OTHER";
 
-function authenticate(req: VercelRequest): boolean {
-  const auth = req.headers.authorization;
-  if (!auth?.startsWith("Bearer ")) return false;
-  return verifyToken(auth.slice(7));
-}
-
 function chatError(
   res: VercelResponse,
   status: number,
@@ -70,7 +64,8 @@ function mapUpstreamStatus(status: number): { code: ErrorCode; message: string }
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const startedAt = Date.now();
 
-  if (!authenticate(req)) {
+  const user = await authenticate(req);
+  if (!user) {
     safeLog({ endpoint: "/api/chat", method: req.method, status: 401 });
     return res.status(401).json({ error: "Unauthorized" });
   }

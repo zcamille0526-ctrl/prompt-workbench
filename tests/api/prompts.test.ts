@@ -1,43 +1,89 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-vi.stubEnv("SHARED_PASSWORD", "test-password-123");
 vi.stubEnv("SUPABASE_URL", "https://test.supabase.co");
 vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-key");
 
-// A lazy chainable that returns itself for every method until awaited.
-// Each test installs mockFrom to return whatever shape it wants per call,
-// so we don't need a single one-size-fits-all mock here.
-const mockFrom = vi.fn();
-vi.mock("@supabase/supabase-js", () => ({
-  createClient: () => ({ from: mockFrom }),
-}));
+// Bag-style mock used across the Phase 2 endpoint tests. Each test wires up
+// what auth.getUser / profile lookup / table operations should return; the
+// chain object collects the call sequence so we can assert what the handler
+// asked for.
 
-const verifyMod = await import("../../api/verify");
-const verifyHandler = verifyMod.default;
-const promptsMod = await import("../../api/prompts");
-const promptsHandler = promptsMod.default;
-
-type MockRes = {
-  status: ReturnType<typeof vi.fn>;
-  json: ReturnType<typeof vi.fn>;
-  statusCode: number;
-  body: unknown;
+type ChainCall = { table: string; method: string; args: unknown[] };
+type Bag = {
+  getUser: ReturnType<typeof vi.fn>;
+  // For each "from(table)" call we plant a queue of results keyed by table.
+  // Each select/insert/update/delete chain ends in single() / order() —
+  // we resolve those with the next item from the queue for that table.
+  results: Map<string, Array<{ data: unknown; error: unknown }>>;
+  calls: ChainCall[];
 };
 
-function makeRes(): MockRes {
-  const res: MockRes = {
-    statusCode: 0,
-    body: undefined,
-    status: vi.fn(),
-    json: vi.fn(),
-  };
-  res.status.mockImplementation((code: number) => {
-    res.statusCode = code;
+const bag: Bag = {
+  getUser: vi.fn(),
+  results: new Map(),
+  calls: [],
+};
+
+function pushResult(table: string, result: { data: unknown; error: unknown }) {
+  if (!bag.results.has(table)) bag.results.set(table, []);
+  bag.results.get(table)!.push(result);
+}
+
+function nextResult(table: string): { data: unknown; error: unknown } {
+  const q = bag.results.get(table);
+  if (!q || q.length === 0) {
+    return { data: null, error: { message: `no mocked result for ${table}` } };
+  }
+  return q.shift()!;
+}
+
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: () => ({
+    auth: {
+      getUser: (...a: unknown[]) => (bag.getUser as any)(...a),
+    },
+    from: (table: string) => {
+      const chain: any = {};
+      const record = (method: string) =>
+        (...args: unknown[]) => {
+          bag.calls.push({ table, method, args });
+          return chain;
+        };
+      chain.select = record("select");
+      chain.eq = record("eq");
+      chain.insert = (...args: unknown[]) => {
+        bag.calls.push({ table, method: "insert", args });
+        return chain;
+      };
+      chain.update = (...args: unknown[]) => {
+        bag.calls.push({ table, method: "update", args });
+        return chain;
+      };
+      chain.delete = (...args: unknown[]) => {
+        bag.calls.push({ table, method: "delete", args });
+        return chain;
+      };
+      chain.order = record("order");
+      // Both single() and the bare-then path resolve from the same queue.
+      chain.single = () => Promise.resolve(nextResult(table));
+      chain.then = (fn: any) => Promise.resolve(nextResult(table)).then(fn);
+      return chain;
+    },
+  }),
+}));
+
+const promptsHandler = (await import("../../api/prompts")).default;
+const supaLib = await import("../../api/lib/supabase");
+
+function makeRes() {
+  const res: any = { statusCode: 0, body: undefined };
+  res.status = vi.fn((c: number) => {
+    res.statusCode = c;
     return res;
   });
-  res.json.mockImplementation((data: unknown) => {
-    res.body = data;
+  res.json = vi.fn((d: unknown) => {
+    res.body = d;
     return res;
   });
   return res;
@@ -57,357 +103,408 @@ function makeReq(opts: {
   } as unknown as VercelRequest;
 }
 
+// Reusable user fixtures.
+const REGULAR_USER = {
+  id: "user-aaa",
+  email: "alice@example.com",
+  display_name: "Alice",
+  is_admin: false,
+};
+const ADMIN_USER = {
+  id: "user-zzz",
+  email: "admin@example.com",
+  display_name: "Admin",
+  is_admin: true,
+};
+
 /**
- * Builds a chainable Supabase query mock that resolves to `result` and
- * exposes the recorded calls. Methods (eq, order, single, select, update,
- * delete, insert) return `this` so any call sequence works.
+ * Wire authenticate() to return the given user. authenticate() does:
+ *   1. supabase.auth.getUser(token) → { user: { id, email, user_metadata }}
+ *   2. select profiles by id → { display_name, is_admin }
+ * Both must succeed for authenticate() to return a non-null user.
  */
-function chain(result: { data?: unknown; error?: unknown }) {
-  const calls: { method: string; args: unknown[] }[] = [];
-  const make = () => {
-    const obj: any = {};
-    for (const m of ["select", "insert", "update", "delete", "eq", "order"]) {
-      obj[m] = (...args: unknown[]) => {
-        calls.push({ method: m, args });
-        return obj;
-      };
-    }
-    obj.single = () => Promise.resolve(result);
-    obj.then = (fn: any) => Promise.resolve(result).then(fn);
-    return obj;
-  };
-  return { obj: make(), calls };
+function mockAuthenticated(user: {
+  id: string;
+  email: string;
+  display_name: string;
+  is_admin: boolean;
+}) {
+  bag.getUser.mockResolvedValue({
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        user_metadata: { password_set: true },
+      },
+    },
+    error: null,
+  });
+  pushResult("profiles", {
+    data: { display_name: user.display_name, is_admin: user.is_admin },
+    error: null,
+  });
 }
 
-let token: string;
-
-beforeEach(async () => {
-  const verifyReq = makeReq({
-    method: "POST",
-    body: { password: "test-password-123" },
-  });
-  const verifyRes = makeRes();
-  await verifyHandler(verifyReq, verifyRes as unknown as VercelResponse);
-  token = (verifyRes.body as { token: string }).token;
-  mockFrom.mockReset();
+beforeEach(() => {
+  bag.getUser.mockReset();
+  bag.results.clear();
+  bag.calls = [];
+  supaLib.__resetServiceRoleClientForTests();
 });
 
-describe("prompts handler — auth", () => {
-  it("returns 401 without token", async () => {
+describe("/api/prompts — auth", () => {
+  it("401 without bearer token", async () => {
     const req = makeReq({ method: "GET" });
     const res = makeRes();
     await promptsHandler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(401);
   });
 
-  it("returns 401 with invalid token", async () => {
-    const req = makeReq({
-      method: "GET",
-      authorization: "Bearer invalid-token",
+  it("401 when password_set=false (reverse half-success window)", async () => {
+    bag.getUser.mockResolvedValue({
+      data: {
+        user: {
+          id: "x",
+          email: "x@y.com",
+          user_metadata: {},
+        },
+      },
+      error: null,
     });
+    const req = makeReq({ method: "GET", authorization: "Bearer T" });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("401 when profile is missing", async () => {
+    bag.getUser.mockResolvedValue({
+      data: {
+        user: {
+          id: "x",
+          email: "x@y.com",
+          user_metadata: { password_set: true },
+        },
+      },
+      error: null,
+    });
+    pushResult("profiles", { data: null, error: null });
+    const req = makeReq({ method: "GET", authorization: "Bearer T" });
     const res = makeRes();
     await promptsHandler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(401);
   });
 });
 
-describe("GET /api/prompts — draft filtering", () => {
-  it("without viewer, returns only published prompts", async () => {
-    const c1 = chain({
-      data: [{ id: "1", is_draft: false, created_at: "2026-05-06T00:00:00Z" }],
+describe("/api/prompts GET", () => {
+  it("returns published + caller's drafts, flattens creator profile", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushResult("prompts", {
+      data: [
+        {
+          id: "p1",
+          title: "pub-1",
+          is_draft: false,
+          created_by_id: "other",
+          created_at: "2026-05-01",
+          creator: { display_name: "Bob" },
+        },
+      ],
       error: null,
     });
-    mockFrom.mockReturnValue(c1.obj);
+    pushResult("prompts", {
+      data: [
+        {
+          id: "p2",
+          title: "my-draft",
+          is_draft: true,
+          created_by_id: REGULAR_USER.id,
+          created_at: "2026-05-02",
+          creator: { display_name: "Alice" },
+        },
+      ],
+      error: null,
+    });
 
-    const req = makeReq({ method: "GET", authorization: `Bearer ${token}` });
+    const req = makeReq({ method: "GET", authorization: "Bearer T" });
     const res = makeRes();
     await promptsHandler(req, res as unknown as VercelResponse);
 
     expect(res.statusCode).toBe(200);
-    // Only one query — published — was issued
-    expect(c1.calls.filter((c) => c.method === "eq")).toEqual([
-      { method: "eq", args: ["is_draft", false] },
-    ]);
-  });
+    const list = res.body as any[];
+    expect(list).toHaveLength(2);
+    // Newest first (2026-05-02 before 2026-05-01).
+    expect(list[0].id).toBe("p2");
+    // Creator alias is flattened to created_by_name and creator nested
+    // object is removed.
+    expect(list[0].created_by_name).toBe("Alice");
+    expect(list[1].created_by_name).toBe("Bob");
+    expect(list[0].creator).toBeUndefined();
 
-  it("with viewer, runs both published query and viewer-draft query", async () => {
-    const calls: any[] = [];
-    let n = 0;
-    mockFrom.mockImplementation(() => {
-      n++;
-      if (n === 1) {
-        const c = chain({
-          data: [{ id: "p1", is_draft: false, created_at: "2026-05-06T01:00:00Z" }],
-          error: null,
-        });
-        calls.push(c);
-        return c.obj;
-      }
-      const c = chain({
-        data: [{ id: "d1", is_draft: true, created_by: "alice", created_at: "2026-05-06T02:00:00Z" }],
-        error: null,
-      });
-      calls.push(c);
-      return c.obj;
-    });
-
-    const req = makeReq({
-      method: "GET",
-      query: { viewer: "alice" },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await promptsHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(200);
-    expect(mockFrom).toHaveBeenCalledTimes(2);
-    // Second query filters drafts AND created_by
-    const draftEqCalls = calls[1].calls.filter((c: any) => c.method === "eq");
-    expect(draftEqCalls).toEqual([
-      { method: "eq", args: ["is_draft", true] },
-      { method: "eq", args: ["created_by", "alice"] },
-    ]);
-    // Result is merged & sorted desc: draft (02:00) before published (01:00)
-    const body = res.body as any[];
-    expect(body.map((p) => p.id)).toEqual(["d1", "p1"]);
-  });
-
-  it("rejects viewer with disallowed characters", async () => {
-    const req = makeReq({
-      method: "GET",
-      query: { viewer: "alice'; drop table--" },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await promptsHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(400);
-    expect(mockFrom).not.toHaveBeenCalled();
-  });
-
-  it("accepts Chinese viewer names", async () => {
-    const c1 = chain({ data: [], error: null });
-    const c2 = chain({ data: [], error: null });
-    let n = 0;
-    mockFrom.mockImplementation(() => (++n === 1 ? c1.obj : c2.obj));
-
-    const req = makeReq({
-      method: "GET",
-      query: { viewer: "卡米尔" },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await promptsHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(200);
+    // Spec §5.3: drafts list is filtered by created_by_id = caller.
+    const draftQuery = bag.calls.filter(
+      (c) => c.table === "prompts" && c.method === "eq"
+    );
+    const draftCreatedByEq = draftQuery.find(
+      (c) => (c.args[0] as string) === "created_by_id"
+    );
+    expect(draftCreatedByEq?.args[1]).toBe(REGULAR_USER.id);
   });
 });
 
-describe("POST /api/prompts — is_draft", () => {
-  it("accepts is_draft=true", async () => {
-    const c = chain({
-      data: { id: "new", is_draft: true, created_by: "alice" },
+describe("/api/prompts POST", () => {
+  it("strict-rejects body containing created_by", async () => {
+    mockAuthenticated(REGULAR_USER);
+    const req = makeReq({
+      method: "POST",
+      authorization: "Bearer T",
+      body: {
+        title: "t",
+        content: "c",
+        category: "生文",
+        tags: [],
+        variables: [],
+        is_draft: false,
+        created_by: "forged",
+      },
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe("Invalid payload");
+  });
+
+  it("strict-rejects body containing created_by_id", async () => {
+    mockAuthenticated(REGULAR_USER);
+    const req = makeReq({
+      method: "POST",
+      authorization: "Bearer T",
+      body: {
+        title: "t",
+        content: "c",
+        category: "生文",
+        tags: [],
+        variables: [],
+        is_draft: false,
+        created_by_id: "00000000-0000-0000-0000-000000000000",
+      },
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("injects created_by_id from authenticated user — sanity insert payload", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushResult("prompts", {
+      data: {
+        id: "new-id",
+        title: "t",
+        created_by_id: REGULAR_USER.id,
+        creator: { display_name: REGULAR_USER.display_name },
+      },
       error: null,
     });
-    mockFrom.mockReturnValue(c.obj);
 
     const req = makeReq({
       method: "POST",
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
       body: {
-        title: "Draft thing",
-        content: "wip",
-        category: "通用",
+        title: "t",
+        content: "c",
+        category: "生文",
         tags: [],
         variables: [],
-        created_by: "alice",
-        is_draft: true,
+        is_draft: false,
       },
     });
     const res = makeRes();
     await promptsHandler(req, res as unknown as VercelResponse);
 
     expect(res.statusCode).toBe(201);
-    const insertCall = c.calls.find((x) => x.method === "insert");
-    expect(insertCall?.args[0]).toEqual(
-      expect.objectContaining({ is_draft: true, created_by: "alice" })
+    const insertCall = bag.calls.find(
+      (c) => c.table === "prompts" && c.method === "insert"
     );
-  });
-
-  it("rejects unknown fields (strict schema)", async () => {
-    const req = makeReq({
-      method: "POST",
-      authorization: `Bearer ${token}`,
-      body: {
-        title: "x",
-        content: "y",
-        category: "通用",
-        tags: [],
-        variables: [],
-        created_by: "alice",
-        private: true, // legacy field name — must be rejected
-      },
-    });
-    const res = makeRes();
-    await promptsHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(400);
-    expect(mockFrom).not.toHaveBeenCalled();
+    expect((insertCall!.args[0] as any).created_by_id).toBe(REGULAR_USER.id);
+    // Response is flattened.
+    expect(res.body.created_by_name).toBe(REGULAR_USER.display_name);
+    expect(res.body.creator).toBeUndefined();
   });
 });
 
-describe("PUT /api/prompts — draft owner check", () => {
-  function makeFetchExisting(existing: { is_draft: boolean; created_by: string } | null) {
-    return chain({
-      data: existing,
-      error: existing ? null : { message: "not found" },
+describe("/api/prompts PUT — ownership", () => {
+  function pushExisting(opts: { is_draft: boolean; owner: string }) {
+    pushResult("prompts", {
+      data: { is_draft: opts.is_draft, created_by_id: opts.owner },
+      error: null,
+    });
+  }
+  function pushUpdated() {
+    pushResult("prompts", {
+      data: {
+        id: "p1",
+        title: "updated",
+        creator: { display_name: "X" },
+      },
+      error: null,
+    });
+  }
+  const validBody = {
+    title: "new",
+    content: "c",
+    category: "生文",
+    tags: [],
+    variables: [],
+    is_draft: false,
+  };
+
+  it("404 when prompt does not exist", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushResult("prompts", { data: null, error: { message: "no rows" } });
+    const req = makeReq({
+      method: "PUT",
+      authorization: "Bearer T",
+      query: { id: "p1" },
+      body: validBody,
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("owner can edit own published prompt → 200", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushExisting({ is_draft: false, owner: REGULAR_USER.id });
+    pushUpdated();
+    const req = makeReq({
+      method: "PUT",
+      authorization: "Bearer T",
+      query: { id: "p1" },
+      body: validBody,
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("non-owner non-admin → 403 on published prompt", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushExisting({ is_draft: false, owner: "someone-else" });
+    const req = makeReq({
+      method: "PUT",
+      authorization: "Bearer T",
+      query: { id: "p1" },
+      body: validBody,
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("non-owner non-admin → 403 on someone else's draft", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushExisting({ is_draft: true, owner: "someone-else" });
+    const req = makeReq({
+      method: "PUT",
+      authorization: "Bearer T",
+      query: { id: "p1" },
+      body: validBody,
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("admin can edit other users' published prompts → 200", async () => {
+    mockAuthenticated(ADMIN_USER);
+    pushExisting({ is_draft: false, owner: "someone-else" });
+    pushUpdated();
+    const req = makeReq({
+      method: "PUT",
+      authorization: "Bearer T",
+      query: { id: "p1" },
+      body: validBody,
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("admin can edit other users' drafts → 200 (clean-up authority per spec §5.3)", async () => {
+    mockAuthenticated(ADMIN_USER);
+    pushExisting({ is_draft: true, owner: "someone-else" });
+    pushUpdated();
+    const req = makeReq({
+      method: "PUT",
+      authorization: "Bearer T",
+      query: { id: "p1" },
+      body: validBody,
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("PUT body cannot smuggle a created_by_id field (strict schema)", async () => {
+    mockAuthenticated(REGULAR_USER);
+    const req = makeReq({
+      method: "PUT",
+      authorization: "Bearer T",
+      query: { id: "p1" },
+      body: { ...validBody, created_by_id: "forged" },
+    });
+    const res = makeRes();
+    await promptsHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe("/api/prompts DELETE — ownership", () => {
+  function pushExisting(opts: { is_draft: boolean; owner: string }) {
+    pushResult("prompts", {
+      data: { is_draft: opts.is_draft, created_by_id: opts.owner },
+      error: null,
     });
   }
 
-  it("returns 403 when editing a draft and viewer is missing", async () => {
-    const fetchC = makeFetchExisting({ is_draft: true, created_by: "alice" });
-    mockFrom.mockReturnValueOnce(fetchC.obj);
-
+  it("non-owner non-admin → 403", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushExisting({ is_draft: false, owner: "someone-else" });
     const req = makeReq({
-      method: "PUT",
-      query: { id: "d1" },
-      authorization: `Bearer ${token}`,
-      body: { title: "x", content: "y", category: "通用", tags: [], variables: [] },
+      method: "DELETE",
+      authorization: "Bearer T",
+      query: { id: "p1" },
     });
     const res = makeRes();
     await promptsHandler(req, res as unknown as VercelResponse);
-
     expect(res.statusCode).toBe(403);
-    expect(mockFrom).toHaveBeenCalledTimes(1); // never reached the update call
   });
 
-  it("returns 403 when viewer differs from draft owner", async () => {
-    const fetchC = makeFetchExisting({ is_draft: true, created_by: "alice" });
-    mockFrom.mockReturnValueOnce(fetchC.obj);
-
+  it("owner → 200", async () => {
+    mockAuthenticated(REGULAR_USER);
+    pushExisting({ is_draft: false, owner: REGULAR_USER.id });
+    pushResult("prompts", { data: null, error: null });
     const req = makeReq({
-      method: "PUT",
-      query: { id: "d1", viewer: "bob" },
-      authorization: `Bearer ${token}`,
-      body: { title: "x", content: "y", category: "通用", tags: [], variables: [] },
+      method: "DELETE",
+      authorization: "Bearer T",
+      query: { id: "p1" },
     });
     const res = makeRes();
     await promptsHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(403);
-    expect(mockFrom).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows update when viewer matches draft owner", async () => {
-    const fetchC = makeFetchExisting({ is_draft: true, created_by: "alice" });
-    const updateC = chain({ data: { id: "d1", title: "new" }, error: null });
-    let call = 0;
-    mockFrom.mockImplementation(() => (++call === 1 ? fetchC.obj : updateC.obj));
-
-    const req = makeReq({
-      method: "PUT",
-      query: { id: "d1", viewer: "alice" },
-      authorization: `Bearer ${token}`,
-      body: { title: "new", content: "y", category: "通用", tags: [], variables: [] },
-    });
-    const res = makeRes();
-    await promptsHandler(req, res as unknown as VercelResponse);
-
     expect(res.statusCode).toBe(200);
   });
 
-  it("returns 403 when editing a published prompt as non-owner", async () => {
-    const fetchC = makeFetchExisting({ is_draft: false, created_by: "alice" });
-    mockFrom.mockReturnValueOnce(fetchC.obj);
-
-    const req = makeReq({
-      method: "PUT",
-      query: { id: "p1", viewer: "bob" }, // different from owner
-      authorization: `Bearer ${token}`,
-      body: { title: "new", content: "y", category: "通用", tags: [], variables: [] },
-    });
-    const res = makeRes();
-    await promptsHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(403);
-    expect(mockFrom).toHaveBeenCalledTimes(1); // never reached the update call
-  });
-
-  it("allows the owner to edit a published prompt", async () => {
-    const fetchC = makeFetchExisting({ is_draft: false, created_by: "alice" });
-    const updateC = chain({ data: { id: "p1", title: "new" }, error: null });
-    let call = 0;
-    mockFrom.mockImplementation(() => (++call === 1 ? fetchC.obj : updateC.obj));
-
-    const req = makeReq({
-      method: "PUT",
-      query: { id: "p1", viewer: "alice" },
-      authorization: `Bearer ${token}`,
-      body: { title: "new", content: "y", category: "通用", tags: [], variables: [] },
-    });
-    const res = makeRes();
-    await promptsHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(200);
-  });
-});
-
-describe("DELETE /api/prompts — draft owner check", () => {
-  it("returns 403 when deleting a draft as non-owner", async () => {
-    const fetchC = chain({
-      data: { is_draft: true, created_by: "alice" },
-      error: null,
-    });
-    mockFrom.mockReturnValueOnce(fetchC.obj);
-
+  it("admin can delete other users' drafts → 200", async () => {
+    mockAuthenticated(ADMIN_USER);
+    pushExisting({ is_draft: true, owner: "someone-else" });
+    pushResult("prompts", { data: null, error: null });
     const req = makeReq({
       method: "DELETE",
-      query: { id: "d1", viewer: "bob" },
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
+      query: { id: "p1" },
     });
     const res = makeRes();
     await promptsHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(403);
-    expect(mockFrom).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns 403 when deleting a published prompt as non-owner", async () => {
-    const fetchC = chain({
-      data: { is_draft: false, created_by: "alice" },
-      error: null,
-    });
-    mockFrom.mockReturnValueOnce(fetchC.obj);
-
-    const req = makeReq({
-      method: "DELETE",
-      query: { id: "p1", viewer: "bob" },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await promptsHandler(req, res as unknown as VercelResponse);
-
-    expect(res.statusCode).toBe(403);
-    expect(mockFrom).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows the owner to delete a published prompt", async () => {
-    const fetchC = chain({
-      data: { is_draft: false, created_by: "alice" },
-      error: null,
-    });
-    const delC = chain({ data: null, error: null });
-    let call = 0;
-    mockFrom.mockImplementation(() => (++call === 1 ? fetchC.obj : delC.obj));
-
-    const req = makeReq({
-      method: "DELETE",
-      query: { id: "p1", viewer: "alice" },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await promptsHandler(req, res as unknown as VercelResponse);
-
     expect(res.statusCode).toBe(200);
   });
 });

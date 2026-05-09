@@ -35,7 +35,7 @@ export function ExamplesList({ examples, isLoading, error, promptCreatedBy, onDe
   };
 
   const canDelete = (ex: Example) =>
-    viewer && (viewer === ex.created_by || viewer === promptCreatedBy);
+    viewer && (viewer === ex.created_by_name || viewer === promptCreatedBy);
 
   return (
     <div className="mt-6">
@@ -91,7 +91,7 @@ function ExampleCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-primary">
-            {example.title || `${example.created_by} 的示例`}
+            {example.title || `${example.created_by_name} 的示例`}
           </div>
           <div className="mt-1 text-xs text-text-primary/70 flex flex-wrap gap-x-3 gap-y-1">
             <span>模型：{example.model}</span>
@@ -150,7 +150,7 @@ function ExampleCard({
       )}
 
       <div className="mt-2 text-xs text-text-primary/60">
-        {example.created_by} · {new Date(example.created_at).toLocaleDateString("zh-CN")}
+        {example.created_by_name} · {new Date(example.created_at).toLocaleDateString("zh-CN")}
       </div>
     </div>
   );

@@ -23,16 +23,15 @@ const promptCommonShape = {
   is_draft: z.boolean().default(false),
 };
 
-// POST schema: includes created_by (the new owner is the current user's name)
+// Phase 2: created_by_id is filled in server-side from authenticate() —
+// schemas no longer accept any kind of owner field from the client. Any
+// stray "created_by" / "created_by_id" in the request body must hit the
+// strict() rejection so prod can never accept a forged owner.
 export const PromptCreateSchema = z
-  .object({
-    ...promptCommonShape,
-    created_by: z.string().min(1, "创建人不能为空"),
-  })
+  .object(promptCommonShape)
   .strict()
   .refine(dedupVariables, dedupMessage);
 
-// PUT schema: omits created_by (owner is immutable; any attempt to change it returns 400)
 export const PromptUpdateSchema = z
   .object(promptCommonShape)
   .strict()
@@ -42,8 +41,6 @@ export type PromptCreateInput = z.infer<typeof PromptCreateSchema>;
 export type PromptUpdateInput = z.infer<typeof PromptUpdateSchema>;
 
 // Backwards-compatible alias for existing form code that submits new prompts.
-// The form supplies created_by from sessionStorage so it always matches the
-// create-shape; for edit it strips created_by before submitting (see PromptForm).
 export const PromptSchema = PromptCreateSchema;
 export type PromptInput = PromptCreateInput;
 
@@ -54,7 +51,10 @@ export interface Prompt {
   category: string;
   tags: string[];
   variables: Variable[];
-  created_by: string;
+  /** UUID of the auth user that created this prompt. */
+  created_by_id: string;
+  /** display_name resolved from profiles at read time (joined server-side). */
+  created_by_name: string;
   created_at: string;
   updated_at: string;
   use_count: number;
@@ -78,7 +78,6 @@ export const ExampleCreateSchema = z
     variable_values: z.record(z.string(), z.string()).default({}),
     model: z.string().min(1).max(64),
     messages: z.array(ExampleMessageSchema).min(2).max(40),
-    created_by: z.string().min(1).max(64),
   })
   .strict();
 
@@ -91,6 +90,7 @@ export interface Example {
   variable_values: Record<string, string>;
   model: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
-  created_by: string;
+  created_by_id: string;
+  created_by_name: string;
   created_at: string;
 }

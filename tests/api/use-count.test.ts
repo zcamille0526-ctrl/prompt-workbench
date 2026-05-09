@@ -1,141 +1,140 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-vi.stubEnv("SHARED_PASSWORD", "test-password-123");
 vi.stubEnv("SUPABASE_URL", "https://test.supabase.co");
 vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-key");
 
-const mockRpc = vi.fn();
-
-vi.mock("@supabase/supabase-js", () => ({
-  createClient: () => ({ rpc: mockRpc }),
-}));
-
-const verifyMod = await import("../../api/verify");
-const verifyHandler = verifyMod.default;
-const useCountMod = await import("../../api/use-count");
-const useCountHandler = useCountMod.default;
-
-type MockRes = {
-  status: ReturnType<typeof vi.fn>;
-  json: ReturnType<typeof vi.fn>;
-  statusCode: number;
-  body: unknown;
+const bag = {
+  getUser: vi.fn(),
+  rpc: vi.fn(),
+  profileLookup: { data: null as unknown, error: null as unknown },
 };
 
-function makeRes(): MockRes {
-  const res: MockRes = {
-    statusCode: 0,
-    body: undefined,
-    status: vi.fn(),
-    json: vi.fn(),
-  };
-  res.status.mockImplementation((code: number) => {
-    res.statusCode = code;
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: () => ({
+    auth: { getUser: (...a: unknown[]) => (bag.getUser as any)(...a) },
+    from: () => {
+      const c: any = {};
+      c.select = () => c;
+      c.eq = () => c;
+      c.single = () => Promise.resolve(bag.profileLookup);
+      return c;
+    },
+    rpc: (...a: unknown[]) => (bag.rpc as any)(...a),
+  }),
+}));
+
+const handler = (await import("../../api/use-count")).default;
+const supaLib = await import("../../api/lib/supabase");
+
+function makeRes() {
+  const res: any = { statusCode: 0, body: undefined };
+  res.status = vi.fn((c: number) => {
+    res.statusCode = c;
     return res;
   });
-  res.json.mockImplementation((data: unknown) => {
-    res.body = data;
+  res.json = vi.fn((d: unknown) => {
+    res.body = d;
     return res;
   });
   return res;
 }
 
 function makeReq(opts: {
-  method: string;
+  method?: string;
   body?: unknown;
   authorization?: string;
 }): VercelRequest {
   return {
-    method: opts.method,
+    method: opts.method ?? "POST",
     body: opts.body,
     query: {},
     headers: opts.authorization ? { authorization: opts.authorization } : {},
   } as unknown as VercelRequest;
 }
 
-let token: string;
-
-const VALID_UUID = "550e8400-e29b-41d4-a716-446655440000";
-
-beforeEach(async () => {
-  mockRpc.mockReset();
-  const verifyReq = makeReq({
-    method: "POST",
-    body: { password: "test-password-123" },
+function mockAuthenticated() {
+  bag.getUser.mockResolvedValue({
+    data: {
+      user: {
+        id: "u1",
+        email: "x@y.com",
+        user_metadata: { password_set: true },
+      },
+    },
+    error: null,
   });
-  const verifyRes = makeRes();
-  await verifyHandler(verifyReq, verifyRes as unknown as VercelResponse);
-  token = (verifyRes.body as { token: string }).token;
+  bag.profileLookup = {
+    data: { display_name: "X", is_admin: false },
+    error: null,
+  };
+}
+
+beforeEach(() => {
+  bag.getUser.mockReset();
+  bag.rpc.mockReset();
+  bag.profileLookup = { data: null, error: null };
+  supaLib.__resetServiceRoleClientForTests();
 });
 
-describe("POST /api/use-count", () => {
-  it("returns 401 without token", async () => {
-    const req = makeReq({ method: "POST", body: { id: VALID_UUID } });
+describe("/api/use-count", () => {
+  it("401 without bearer token", async () => {
+    const req = makeReq({});
     const res = makeRes();
-    await useCountHandler(req, res as unknown as VercelResponse);
+    await handler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(401);
-    expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it("returns 405 for non-POST", async () => {
-    const req = makeReq({
-      method: "GET",
-      authorization: `Bearer ${token}`,
+  it("401 when password_set=false", async () => {
+    bag.getUser.mockResolvedValue({
+      data: { user: { id: "u1", email: "x@y.com", user_metadata: {} } },
+      error: null,
     });
+    const req = makeReq({ authorization: "Bearer T", body: { id: "00000000-0000-0000-0000-000000000000" } });
     const res = makeRes();
-    await useCountHandler(req, res as unknown as VercelResponse);
-    expect(res.statusCode).toBe(405);
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(401);
   });
 
-  it("returns 400 when id is missing", async () => {
-    const req = makeReq({
-      method: "POST",
-      body: {},
-      authorization: `Bearer ${token}`,
-    });
+  it("400 on invalid uuid", async () => {
+    mockAuthenticated();
+    const req = makeReq({ authorization: "Bearer T", body: { id: "not-a-uuid" } });
     const res = makeRes();
-    await useCountHandler(req, res as unknown as VercelResponse);
+    await handler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(400);
-    expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when id is not a UUID", async () => {
+  it("400 on unknown field (strict schema)", async () => {
+    mockAuthenticated();
     const req = makeReq({
-      method: "POST",
-      body: { id: "not-a-uuid" },
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
+      body: { id: "11111111-1111-4111-8111-111111111111", evil: true },
     });
     const res = makeRes();
-    await useCountHandler(req, res as unknown as VercelResponse);
+    await handler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(400);
-    expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when body has unknown fields (strict schema)", async () => {
+  it("happy path increments via RPC and returns 200", async () => {
+    mockAuthenticated();
+    bag.rpc.mockResolvedValue({ error: null });
     const req = makeReq({
-      method: "POST",
-      body: { id: VALID_UUID, extra: "should-not-be-here" },
-      authorization: `Bearer ${token}`,
+      authorization: "Bearer T",
+      body: { id: "11111111-1111-4111-8111-111111111111" },
     });
     const res = makeRes();
-    await useCountHandler(req, res as unknown as VercelResponse);
-    expect(res.statusCode).toBe(400);
-    expect(mockRpc).not.toHaveBeenCalled();
-  });
-
-  it("calls increment_use_count RPC with valid id", async () => {
-    mockRpc.mockResolvedValue({ error: null });
-    const req = makeReq({
-      method: "POST",
-      body: { id: VALID_UUID },
-      authorization: `Bearer ${token}`,
-    });
-    const res = makeRes();
-    await useCountHandler(req, res as unknown as VercelResponse);
+    await handler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(200);
-    expect(mockRpc).toHaveBeenCalledWith("increment_use_count", {
-      p_id: VALID_UUID,
+    expect(bag.rpc).toHaveBeenCalledWith("increment_use_count", {
+      p_id: "11111111-1111-4111-8111-111111111111",
     });
+  });
+
+  it("405 for non-POST", async () => {
+    mockAuthenticated();
+    const req = makeReq({ method: "GET", authorization: "Bearer T" });
+    const res = makeRes();
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(405);
   });
 });

@@ -39,7 +39,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
     [prompt.content, values]
   );
 
-  const isOwner = prompt.created_by === getUserName();
+  const isOwner = prompt.created_by_name === getUserName();
 
   // Examples lifted here so both the test-run save action and the list view
   // share state — saving an example optimistically prepends it to the list.
@@ -60,7 +60,6 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
       variable_values: input.variable_values,
       model: input.model,
       messages: input.messages,
-      created_by: userName,
     });
   };
 
@@ -197,7 +196,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
       </button>
 
       <div className="mt-4 text-xs text-text-primary">
-        创建人:{prompt.created_by} · 更新于{" "}
+        创建人:{prompt.created_by_name} · 更新于{" "}
         {new Date(prompt.updated_at).toLocaleDateString("zh-CN")}
         {localCount > 0 && ` · 使用 ${localCount} 次`}
       </div>
@@ -206,7 +205,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
         examples={examples}
         isLoading={examplesLoading}
         error={examplesError}
-        promptCreatedBy={prompt.created_by}
+        promptCreatedBy={prompt.created_by_name}
         onDelete={deleteExample}
       />
 

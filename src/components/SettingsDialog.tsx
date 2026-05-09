@@ -20,7 +20,7 @@ export function SettingsDialog({ open, onOpenChange, prompts, onNameChange }: Pr
   const [confirmStep, setConfirmStep] = useState(false);
 
   const draftCount = prompts.filter(
-    (p) => p.is_draft && p.created_by === currentName
+    (p) => p.is_draft && p.created_by_name === currentName
   ).length;
 
   const handleSave = () => {

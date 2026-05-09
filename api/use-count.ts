@@ -1,13 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { verifyToken } from "./verify.js";
+import { authenticate } from "./lib/auth.js";
+import { getServiceRoleClient } from "./lib/supabase.js";
 import { safeLog } from "./lib/log.js";
-
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
 
 // strict: reject any unknown field (consistent with /api/prompts)
 const RequestSchema = z
@@ -16,16 +11,11 @@ const RequestSchema = z
   })
   .strict();
 
-function authenticate(req: VercelRequest): boolean {
-  const auth = req.headers.authorization;
-  if (!auth?.startsWith("Bearer ")) return false;
-  return verifyToken(auth.slice(7));
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const startedAt = Date.now();
 
-  if (!authenticate(req)) {
+  const user = await authenticate(req);
+  if (!user) {
     safeLog({ endpoint: "/api/use-count", method: req.method, status: 401 });
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -56,6 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // No SELECT step (avoids the read-modify-write race window).
   // Affecting 0 rows (prompt deleted between fetch and copy) is silently
   // accepted to keep the copy flow non-blocking.
+  const supabase = getServiceRoleClient();
   const { error } = await supabase.rpc("increment_use_count", {
     p_id: parsed.data.id,
   });
