@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "../lib/api";
-import { getUserName } from "../lib/userName";
 import type {
   Prompt,
   PromptCreateInput,
@@ -12,13 +11,12 @@ export function usePrompts() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Phase 2: server derives the caller from the Bearer token, so viewer
+  // query params are gone. Draft visibility / owner-only edit / admin
+  // override all happen server-side via authenticate().
   const fetchPrompts = useCallback(async () => {
     try {
-      const viewer = getUserName();
-      const query = viewer
-        ? `/api/prompts?viewer=${encodeURIComponent(viewer)}`
-        : "/api/prompts";
-      const data = await api.request<Prompt[]>(query);
+      const data = await api.request<Prompt[]>("/api/prompts");
       setPrompts(data);
       setError(null);
     } catch (e) {
@@ -43,9 +41,7 @@ export function usePrompts() {
 
   const updatePrompt = useCallback(
     async (id: string, input: PromptUpdateInput) => {
-      const viewer = getUserName();
-      const qs = viewer ? `?id=${id}&viewer=${encodeURIComponent(viewer)}` : `?id=${id}`;
-      const data = await api.request<Prompt>(`/api/prompts${qs}`, {
+      const data = await api.request<Prompt>(`/api/prompts?id=${id}`, {
         method: "PUT",
         body: JSON.stringify(input),
       });
@@ -56,9 +52,7 @@ export function usePrompts() {
   );
 
   const deletePrompt = useCallback(async (id: string) => {
-    const viewer = getUserName();
-    const qs = viewer ? `?id=${id}&viewer=${encodeURIComponent(viewer)}` : `?id=${id}`;
-    await api.request(`/api/prompts${qs}`, { method: "DELETE" });
+    await api.request(`/api/prompts?id=${id}`, { method: "DELETE" });
     setPrompts((prev) => prev.filter((p) => p.id !== id));
   }, []);
 

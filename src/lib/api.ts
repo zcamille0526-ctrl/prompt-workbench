@@ -1,4 +1,5 @@
 import { API_BASE_URL } from "./constants";
+import { getAccessToken, refresh, AuthError } from "./authClient";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -23,56 +24,126 @@ export class ChatError extends Error {
   }
 }
 
-class ApiClient {
-  private token: string | null = null;
+// ---------------------------------------------------------------------------
+// Refresh deduplication
+//
+// When several requests fire concurrently and all get 401 (e.g. the user
+// returns to a tab after a long idle and the polling tick + a click both
+// run), naively each call would POST /api/auth/refresh — burning Supabase
+// quota and risking the second refresh seeing the first call's rotated
+// refresh_token as invalid.
+//
+// We collapse them into a single in-flight refresh promise. Concurrent
+// callers all await the same result; whoever resolves it gets to clear the
+// variable so the NEXT 401 wave triggers a fresh refresh attempt.
+//
+// pendingRefresh holds the access_token (or null on failure). The IIFE
+// pattern means the variable is assigned before any caller can read it,
+// so concurrent callers all see the same promise.
 
-  setToken(token: string) {
-    this.token = token;
-    sessionStorage.setItem("auth_token", token);
+let pendingRefresh: Promise<string | null> | null = null;
+
+async function refreshAccessTokenDeduped(): Promise<string | null> {
+  if (pendingRefresh) return pendingRefresh;
+  pendingRefresh = (async () => {
+    try {
+      const { access_token } = await refresh();
+      return access_token;
+    } catch (err) {
+      if (err instanceof AuthError) return null;
+      // Network errors etc. — treat as refresh failure; caller will see 401.
+      return null;
+    } finally {
+      // Clear AFTER the await chain completes so the in-flight callers all
+      // see the same promise. The next 401 (after this one resolves) gets a
+      // fresh attempt.
+      pendingRefresh = null;
+    }
+  })();
+  return pendingRefresh;
+}
+
+// Test-only escape hatch: reset the dedup state so per-test mocks can prove
+// the dedup actually works (or not).
+export function __resetRefreshDedupForTests(): void {
+  pendingRefresh = null;
+}
+
+/**
+ * Fetch wrapper that injects the current access_token and, on 401, tries
+ * exactly one refresh+retry. Concurrent 401 callers share one refresh via
+ * refreshAccessTokenDeduped().
+ *
+ * Returns the final Response. The body has NOT been consumed; the caller
+ * decides whether to call .json() or stream it (chat streaming needs the
+ * raw body).
+ */
+async function authedFetch(
+  path: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const buildHeaders = (token: string | null): HeadersInit => {
+    const h: Record<string, string> = {
+      ...((init.headers as Record<string, string>) ?? {}),
+    };
+    if (token) h["authorization"] = `Bearer ${token}`;
+    if (init.body && !h["content-type"]) h["content-type"] = "application/json";
+    return h;
+  };
+
+  const token = getAccessToken();
+  const firstRes = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: buildHeaders(token),
+  });
+
+  if (firstRes.status !== 401) return firstRes;
+
+  // The body of a 401 carries no useful retry context; drain it so the
+  // connection can be released cleanly.
+  try {
+    await firstRes.body?.cancel();
+  } catch {
+    /* noop */
   }
+
+  const newToken = await refreshAccessTokenDeduped();
+  if (!newToken) return firstRes;
+
+  return fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: buildHeaders(newToken),
+  });
+}
+
+class ApiClient {
+  // ---- Legacy shims kept until commit 4 deletes useAuth + App.tsx wiring ----
+  //
+  // These are intentionally no-ops on the new auth model. useAuth still
+  // calls api.getToken() / api.clearToken() / api.verify() during Phase 1
+  // boot; commit 4 deletes useAuth entirely and these shims along with it.
 
   getToken(): string | null {
-    if (!this.token) {
-      this.token = sessionStorage.getItem("auth_token");
-    }
-    return this.token;
+    return getAccessToken();
   }
 
-  clearToken() {
-    this.token = null;
-    sessionStorage.removeItem("auth_token");
+  clearToken(): void {
+    // No-op: the new logout flow (authClient.logout) handles full cleanup.
+    // useAuth still calls this on local logout; harmless because the
+    // PasswordGate path that depended on it is being deleted in commit 4.
   }
 
-  async verify(password: string): Promise<boolean> {
-    const res = await fetch(`${API_BASE_URL}/api/verify`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    this.setToken(data.token);
-    return true;
+  /** @deprecated removed in commit 4 alongside PasswordGate / useAuth. */
+  async verify(_password: string): Promise<boolean> {
+    return false;
   }
 
-  async request<T>(
-    path: string,
-    options: RequestInit = {}
-  ): Promise<T> {
-    const token = this.getToken();
-    if (!token) throw new Error("Not authenticated");
+  // ---- Business API ----
 
-    const res = await fetch(`${API_BASE_URL}${path}`, {
-      ...options,
-      headers: {
-        ...options.headers,
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-    });
+  async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+    const res = await authedFetch(path, options);
 
     if (res.status === 401) {
-      this.clearToken();
       throw new Error("Session expired");
     }
 
@@ -113,20 +184,12 @@ class ApiClient {
     model: string,
     messages: ChatMessage[]
   ): Promise<string> {
-    const token = this.getToken();
-    if (!token) throw new ChatError("OTHER", "Not authenticated");
-
-    const res = await fetch(`${API_BASE_URL}/api/chat`, {
+    const res = await authedFetch("/api/chat", {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
       body: JSON.stringify({ apiKey, model, messages }),
     });
 
     if (res.status === 401) {
-      this.clearToken();
       throw new ChatError("OTHER", "Session expired");
     }
 
@@ -169,21 +232,13 @@ class ApiClient {
     onDelta: (chunk: string) => void,
     signal?: AbortSignal
   ): Promise<string> {
-    const token = this.getToken();
-    if (!token) throw new ChatError("OTHER", "Not authenticated");
-
-    const res = await fetch(`${API_BASE_URL}/api/chat`, {
+    const res = await authedFetch("/api/chat", {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
       body: JSON.stringify({ apiKey, model, messages, stream: true }),
       signal,
     });
 
     if (res.status === 401) {
-      this.clearToken();
       throw new ChatError("OTHER", "Session expired");
     }
 
@@ -210,9 +265,6 @@ class ApiClient {
     let buffer = "";
     let full = "";
 
-    // Each SSE event is delimited by a blank line. We accumulate bytes,
-    // peel off complete events, and parse each one. An event is one or
-    // more `field: value` lines; we only care about `event:` and `data:`.
     const processEvent = (block: string) => {
       let eventName = "message";
       const dataLines: string[] = [];
@@ -260,17 +312,19 @@ class ApiClient {
         if (block.trim().length > 0) processEvent(block);
       }
     }
-    // Flush any trailing block (no terminating blank line)
     if (buffer.trim().length > 0) processEvent(buffer);
 
     return full;
   }
 
   // -------- Examples (saved test-run conversations) --------
+  //
+  // Phase 2: viewer query param removed. The server derives the caller's
+  // identity from the Bearer token via authenticate(). Visibility rules
+  // (draft-owner only, option-B delete) all run server-side.
 
-  async listExamples(promptId: string, viewer: string): Promise<unknown[]> {
+  async listExamples(promptId: string): Promise<unknown[]> {
     const qs = new URLSearchParams({ prompt_id: promptId });
-    if (viewer) qs.set("viewer", viewer);
     return this.request(`/api/examples?${qs.toString()}`);
   }
 
@@ -281,9 +335,8 @@ class ApiClient {
     });
   }
 
-  async deleteExample(id: string, viewer: string): Promise<void> {
+  async deleteExample(id: string): Promise<void> {
     const qs = new URLSearchParams({ id });
-    if (viewer) qs.set("viewer", viewer);
     await this.request(`/api/examples?${qs.toString()}`, { method: "DELETE" });
   }
 }

@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
 import { api } from "../lib/api";
-import { getUserName } from "../lib/userName";
 import type { Example, ExampleCreateInput } from "../lib/schemas";
 
 /**
@@ -18,7 +17,7 @@ export function useExamples(promptId: string | null) {
     if (!promptId) return;
     setIsLoading(true);
     try {
-      const data = (await api.listExamples(promptId, getUserName())) as Example[];
+      const data = (await api.listExamples(promptId)) as Example[];
       setExamples(data);
       setError(null);
     } catch (e) {
@@ -39,7 +38,7 @@ export function useExamples(promptId: string | null) {
   }, []);
 
   const deleteExample = useCallback(async (id: string) => {
-    await api.deleteExample(id, getUserName());
+    await api.deleteExample(id);
     setExamples((prev) => prev.filter((e) => e.id !== id));
   }, []);
 
