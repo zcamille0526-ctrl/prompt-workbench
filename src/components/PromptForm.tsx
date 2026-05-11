@@ -3,7 +3,6 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { CATEGORIES } from "../lib/constants";
 import { PromptCreateSchema, PromptUpdateSchema } from "../lib/schemas";
 import { PROMPT_TEMPLATE } from "../lib/templates";
-import { getUserName } from "../lib/userName";
 import type {
   Prompt,
   PromptCreateInput,
@@ -79,19 +78,15 @@ export function PromptForm({
         }
         await onUpdate(parsed.data);
       } else {
-        const userName = getUserName();
-        if (!userName) {
-          setError("请先在设置中填写名字");
-          setIsSubmitting(false);
-          return;
-        }
+        // Phase 2: server derives owner from the Bearer token, so we no
+        // longer submit a created_by field. PromptCreateSchema is .strict()
+        // and would 400 if we did.
         const parsed = PromptCreateSchema.safeParse({
           title,
           content,
           category,
           tags,
           variables: cleanedVariables,
-          created_by: userName,
           is_draft: isDraft,
         });
         if (!parsed.success) {

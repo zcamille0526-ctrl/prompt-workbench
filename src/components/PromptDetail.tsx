@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import type { Prompt } from "../lib/schemas";
 import { extractVariables, substituteVariables } from "../lib/variables";
 import { api } from "../lib/api";
-import { getUserName } from "../lib/userName";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TestRunPanel } from "./TestRunPanel";
 import { ExamplesList } from "./ExamplesList";
 import { useExamples } from "../hooks/useExamples";
@@ -17,6 +17,7 @@ interface Props {
 }
 
 export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSaveContent }: Props) {
+  const currentUser = useCurrentUser();
   const variables = useMemo(
     () => extractVariables(prompt.content),
     [prompt.content]
@@ -39,7 +40,14 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
     [prompt.content, values]
   );
 
-  const isOwner = prompt.created_by_name === getUserName();
+  // Phase 2: owner check on stable UUID + admin override. Spec §5.3 grants
+  // admins clean-up rights over published prompts AND drafts (the API
+  // mirrors this), so the edit/delete buttons surface accordingly.
+  const authedUser =
+    currentUser.status === "authenticated" ? currentUser.user : null;
+  const isOwner =
+    !!authedUser &&
+    (prompt.created_by_id === authedUser.id || authedUser.is_admin);
 
   // Examples lifted here so both the test-run save action and the list view
   // share state — saving an example optimistically prepends it to the list.
@@ -52,8 +60,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     variable_values: Record<string, string>;
   }) => {
-    const userName = getUserName();
-    if (!userName) throw new Error("请先在设置中填写名字");
+    // Phase 2: server injects created_by_id from the Bearer token.
     await createExample({
       prompt_id: prompt.id,
       title: input.title || undefined,
@@ -205,7 +212,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
         examples={examples}
         isLoading={examplesLoading}
         error={examplesError}
-        promptCreatedBy={prompt.created_by_name}
+        promptOwnerId={prompt.created_by_id}
         onDelete={deleteExample}
       />
 

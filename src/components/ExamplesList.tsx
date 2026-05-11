@@ -1,21 +1,21 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Example } from "../lib/schemas";
-import { getUserName } from "../lib/userName";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 
 interface Props {
   examples: Example[];
   isLoading: boolean;
   error: string | null;
-  /** Owner of the parent prompt — used for the option-B delete rule. */
-  promptCreatedBy: string;
+  /** UUID of the parent prompt's owner — drives the option-B delete rule. */
+  promptOwnerId: string;
   onDelete: (id: string) => Promise<void>;
 }
 
-export function ExamplesList({ examples, isLoading, error, promptCreatedBy, onDelete }: Props) {
+export function ExamplesList({ examples, isLoading, error, promptOwnerId, onDelete }: Props) {
+  const currentUser = useCurrentUser();
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const viewer = getUserName();
 
   // Don't render the section at all when empty — keeps the detail panel
   // uncluttered for prompts no one has tested yet. The save flow lives in
@@ -34,8 +34,16 @@ export function ExamplesList({ examples, isLoading, error, promptCreatedBy, onDe
     }
   };
 
+  // Phase 2 spec §5.3: delete permission = example creator OR prompt owner
+  // OR admin. The server enforces this authoritatively; the UI only decides
+  // whether to RENDER the button.
+  const authed =
+    currentUser.status === "authenticated" ? currentUser.user : null;
   const canDelete = (ex: Example) =>
-    viewer && (viewer === ex.created_by_name || viewer === promptCreatedBy);
+    !!authed &&
+    (authed.id === ex.created_by_id ||
+      authed.id === promptOwnerId ||
+      authed.is_admin);
 
   return (
     <div className="mt-6">

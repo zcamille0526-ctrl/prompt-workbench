@@ -117,27 +117,6 @@ async function authedFetch(
 }
 
 class ApiClient {
-  // ---- Legacy shims kept until commit 4 deletes useAuth + App.tsx wiring ----
-  //
-  // These are intentionally no-ops on the new auth model. useAuth still
-  // calls api.getToken() / api.clearToken() / api.verify() during Phase 1
-  // boot; commit 4 deletes useAuth entirely and these shims along with it.
-
-  getToken(): string | null {
-    return getAccessToken();
-  }
-
-  clearToken(): void {
-    // No-op: the new logout flow (authClient.logout) handles full cleanup.
-    // useAuth still calls this on local logout; harmless because the
-    // PasswordGate path that depended on it is being deleted in commit 4.
-  }
-
-  /** @deprecated removed in commit 4 alongside PasswordGate / useAuth. */
-  async verify(_password: string): Promise<boolean> {
-    return false;
-  }
-
   // ---- Business API ----
 
   async request<T>(path: string, options: RequestInit = {}): Promise<T> {

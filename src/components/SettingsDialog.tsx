@@ -1,49 +1,30 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { getUserName, setUserName, isValidUserName } from "../lib/userName";
 import { getApiKey, setApiKey, clearApiKey } from "../lib/apiKey";
-import type { Prompt } from "../lib/schemas";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  prompts: Prompt[];
-  onNameChange: () => void;
 }
 
-export function SettingsDialog({ open, onOpenChange, prompts, onNameChange }: Props) {
-  const currentName = getUserName();
-  const [name, setName] = useState(currentName);
+/**
+ * Phase 2 Settings dialog: API key only.
+ *
+ * Display-name editing intentionally moved to Step 3 (spec §6.3) when the
+ * /api/profile/update endpoint lands. Until then the user's name is shown
+ * read-only here; renaming requires admin help via Supabase console.
+ */
+export function SettingsDialog({ open, onOpenChange }: Props) {
+  const currentUser = useCurrentUser();
   const [apiKey, setApiKeyInput] = useState(() => getApiKey());
-  const [nameError, setNameError] = useState<string | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
-  const [confirmStep, setConfirmStep] = useState(false);
-
-  const draftCount = prompts.filter(
-    (p) => p.is_draft && p.created_by_name === currentName
-  ).length;
 
   const handleSave = () => {
-    const trimmedName = name.trim();
-    if (!isValidUserName(trimmedName)) {
-      setNameError("名字需为 1-32 个中文/英文/数字/空格/_-");
-      return;
-    }
-
     const trimmedKey = apiKey.trim();
     if (trimmedKey && trimmedKey.length < 16) {
       setKeyError("API Key 看起来不完整，请检查");
       return;
-    }
-
-    if (trimmedName !== currentName && draftCount > 0 && !confirmStep) {
-      setConfirmStep(true);
-      return;
-    }
-
-    if (trimmedName !== currentName) {
-      setUserName(trimmedName);
-      onNameChange();
     }
 
     if (trimmedKey) {
@@ -53,18 +34,19 @@ export function SettingsDialog({ open, onOpenChange, prompts, onNameChange }: Pr
       clearApiKey();
     }
 
-    setConfirmStep(false);
     onOpenChange(false);
   };
 
   const handleCancel = () => {
-    setName(currentName);
     setApiKeyInput(getApiKey());
-    setNameError(null);
     setKeyError(null);
-    setConfirmStep(false);
     onOpenChange(false);
   };
+
+  const displayName =
+    currentUser.status === "authenticated" ? currentUser.user.display_name : "";
+  const email =
+    currentUser.status === "authenticated" ? currentUser.user.email : "";
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -75,25 +57,18 @@ export function SettingsDialog({ open, onOpenChange, prompts, onNameChange }: Pr
             设置
           </Dialog.Title>
 
-          <div className="mt-4">
-            <label className="text-sm font-medium text-text-primary">我的名字</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                setNameError(null);
-                setConfirmStep(false);
-              }}
-              className="input-field mt-1"
-              maxLength={32}
-            />
-            {nameError && <p className="text-error text-xs mt-2">{nameError}</p>}
-            {confirmStep && (
-              <p className="text-amber-600 text-xs mt-2">
-                改名后你将无法访问当前 {draftCount} 个草稿提示词，需用旧名字才能再次访问。确认改名？
-              </p>
-            )}
+          <div className="mt-4 text-sm text-text-primary space-y-1">
+            <div>
+              <span className="text-text-primary/70">显示名：</span>
+              <span className="font-medium">{displayName}</span>
+            </div>
+            <div>
+              <span className="text-text-primary/70">邮箱：</span>
+              <span className="font-mono text-xs">{email}</span>
+            </div>
+            <p className="text-xs text-text-primary/60 pt-1">
+              修改显示名将在后续版本支持。
+            </p>
           </div>
 
           <div className="mt-4">
@@ -121,7 +96,7 @@ export function SettingsDialog({ open, onOpenChange, prompts, onNameChange }: Pr
               取消
             </button>
             <button onClick={handleSave} className="btn-primary">
-              {confirmStep ? "确认改名" : "保存"}
+              保存
             </button>
           </div>
         </Dialog.Content>

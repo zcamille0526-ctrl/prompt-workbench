@@ -1,17 +1,16 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
-import { useAuth } from "./hooks/useAuth";
+import { useState, useMemo, useCallback } from "react";
+import { CurrentUserProvider, useCurrentUser } from "./hooks/useCurrentUser";
 import { usePrompts } from "./hooks/usePrompts";
 import { usePromptsPolling } from "./hooks/usePromptsPolling";
-import { PasswordGate } from "./components/PasswordGate";
 import { Layout } from "./components/Layout";
 import { Sidebar } from "./components/Sidebar";
 import { PromptList } from "./components/PromptList";
 import { PromptDetail } from "./components/PromptDetail";
 import { PromptForm } from "./components/PromptForm";
 import { ConfirmDialog } from "./components/ConfirmDialog";
-import { UserNameDialog } from "./components/UserNameDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { getUserName, setUserName } from "./lib/userName";
+import { AuthScreen } from "./components/AuthScreen";
+import { AuthCallback } from "./components/AuthCallback";
 import type {
   Prompt,
   PromptCreateInput,
@@ -37,7 +36,6 @@ function AuthenticatedApp() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<Prompt | undefined>();
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [nameDialogOpen, setNameDialogOpen] = useState(() => !getUserName());
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const filteredPrompts = useMemo(() => {
@@ -130,25 +128,6 @@ function AuthenticatedApp() {
     setSelectedPrompt(updated);
   };
 
-  const handleNameSubmit = (name: string) => {
-    setUserName(name);
-    setNameDialogOpen(false);
-    fetchPrompts();
-  };
-
-  const handleNameChanged = useCallback(() => {
-    // When the user renames themselves, their visible draft set changes —
-    // refetch so the list reflects the new identity immediately.
-    setSelectedPrompt(null);
-    fetchPrompts();
-  }, [fetchPrompts]);
-
-  // If the viewer shifted (e.g. tab restored from backgrounded state after
-  // name cleared), guard: keep forcing the name dialog.
-  useEffect(() => {
-    if (!getUserName()) setNameDialogOpen(true);
-  }, []);
-
   if (isLoading) {
     return (
       <div className="h-screen flex items-center justify-center text-text-primary">
@@ -219,26 +198,77 @@ function AuthenticatedApp() {
         onConfirm={handleDeleteConfirm}
       />
 
-      <UserNameDialog open={nameDialogOpen} onSubmit={handleNameSubmit} />
-
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        prompts={prompts}
-        onNameChange={handleNameChanged}
       />
     </>
   );
 }
 
-export default function App() {
-  const { isAuthenticated, isLoading, error, login } = useAuth();
+/**
+ * Routing — spec §6.4 mandates this exact ordering:
+ *
+ *   1. /auth/callback FIRST. The invite-link landing page must render
+ *      before any session check. Otherwise, an anonymous user clicking
+ *      a fresh invite would be bounced into the AuthScreen (no session
+ *      yet → looks anonymous), and the email-verification flow would
+ *      silently break.
+ *   2. Loading state for the initial /api/auth/me probe so we don't
+ *      flash AuthScreen for an authenticated user mid-bootstrap.
+ *   3. Anonymous → AuthScreen (login + signup tabs).
+ *   4. Authenticated → AuthenticatedApp.
+ */
+function AppRoutes() {
+  const currentUser = useCurrentUser();
 
-  if (!isAuthenticated) {
+  if (window.location.pathname === "/auth/callback") {
     return (
-      <PasswordGate onLogin={login} isLoading={isLoading} error={error} />
+      <AuthCallback
+        onAuthenticated={(user) => {
+          currentUser.setUser(user);
+          // Land in main app on the self-heal path. Replace history so
+          // back-button doesn't take the user to a stale callback URL.
+          window.history.replaceState({}, "", "/");
+        }}
+        onRequireLogin={() => {
+          // First-setup path: server revoked the invite session. Push the
+          // user back to the login screen with a clean URL.
+          window.history.replaceState({}, "", "/");
+          // Force re-render by reloading — simpler than wiring a "go to
+          // login" state through three layers, and the page hits sub-100ms
+          // since /api/auth/me will 401 and we land on AuthScreen.
+          window.location.reload();
+        }}
+      />
+    );
+  }
+
+  if (currentUser.status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-text-primary">
+        加载中...
+      </div>
+    );
+  }
+
+  if (currentUser.status === "anonymous") {
+    return (
+      <AuthScreen
+        onLoggedIn={(data) => {
+          currentUser.setUser(data.user_summary);
+        }}
+      />
     );
   }
 
   return <AuthenticatedApp />;
+}
+
+export default function App() {
+  return (
+    <CurrentUserProvider>
+      <AppRoutes />
+    </CurrentUserProvider>
+  );
 }
