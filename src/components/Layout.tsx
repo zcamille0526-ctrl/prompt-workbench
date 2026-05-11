@@ -123,23 +123,27 @@ export function Layout({ sidebar, list, detail }: Props) {
             {list}
           </div>
 
-          {/* Desktop list with custom width + collapse button */}
+          {/* Desktop list with custom width + dedicated header strip that
+              hosts the collapse button. A header row (not absolute-over) so
+              the button never steals clicks from the first prompt card. */}
           <div
-            className="hidden md:flex flex-col bg-surface rounded-lg shadow-card overflow-hidden relative flex-none"
+            className="hidden md:flex flex-col bg-surface rounded-lg shadow-card overflow-hidden flex-none"
             style={{ width: `${listWidth}px` }}
           >
-            <button
-              type="button"
-              onClick={() => setListCollapsed(true)}
-              className="absolute top-2 right-2 z-10 p-1 rounded hover:bg-gray-100 text-text-primary/50 hover:text-primary"
-              aria-label="收起提示词列表"
-              title="收起提示词列表"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-            {list}
+            <div className="flex justify-end px-2 pt-2 pb-0">
+              <button
+                type="button"
+                onClick={() => setListCollapsed(true)}
+                className="p-1 rounded hover:bg-gray-100 text-text-primary/50 hover:text-primary"
+                aria-label="收起提示词列表"
+                title="收起提示词列表"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 flex flex-col">{list}</div>
           </div>
 
           {/* Drag handle between list and detail. 6px hit target, thin line
