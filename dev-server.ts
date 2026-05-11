@@ -12,6 +12,7 @@ import refreshHandler from "./api/auth/refresh.js";
 import logoutHandler from "./api/auth/logout.js";
 import meHandler from "./api/auth/me.js";
 import resendInviteHandler from "./api/auth/resend-invite.js";
+import profileUpdateHandler from "./api/profile/update.js";
 
 const app = express();
 const PORT = 3001;
@@ -49,6 +50,7 @@ app.post("/api/auth/refresh", adapt(refreshHandler));
 app.post("/api/auth/logout", adapt(logoutHandler));
 app.get("/api/auth/me", adapt(meHandler));
 app.post("/api/auth/resend-invite", adapt(resendInviteHandler));
+app.patch("/api/profile/update", adapt(profileUpdateHandler));
 
 app.listen(PORT, () => {
   console.log(`API server running at http://localhost:${PORT}`);
