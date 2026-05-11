@@ -108,7 +108,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
               {prompt.title}
             </h2>
             {prompt.is_draft && (
-              <span className="text-xs font-medium bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 whitespace-nowrap">
+              <span className="text-xs font-medium bg-tertiary text-tertiary-dark rounded-full px-2 py-0.5 whitespace-nowrap">
                 📝 草稿
               </span>
             )}
@@ -133,7 +133,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
             <button
               onClick={handleTogglePublish}
               disabled={isToggling}
-              className="btn-pill bg-secondary text-primary hover:bg-orange-200 focus-visible:ring-secondary/50 disabled:opacity-50"
+              className="btn-pill bg-secondary text-primary hover:bg-accent/60 focus-visible:ring-accent/40 disabled:opacity-50"
             >
               {isToggling ? "发布中..." : "发布"}
             </button>
@@ -158,7 +158,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
               </button>
               <button
                 onClick={onDelete}
-                className="btn-pill border border-error/30 text-error hover:bg-red-50 focus-visible:ring-error/30"
+                className="btn-pill border border-error/30 text-error hover:bg-error/10 focus-visible:ring-error/30"
               >
                 删除
               </button>

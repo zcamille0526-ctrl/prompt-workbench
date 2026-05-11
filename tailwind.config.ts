@@ -1,31 +1,35 @@
 import type { Config } from "tailwindcss";
 import typography from "@tailwindcss/typography";
 
+// Palette: Happy Hues 13 — warm cream + pink + mint.
+// primary   = headline + stroke + button text
+// text-primary = paragraph (body) color, warmer than primary
+// accent    = pink highlight / primary button bg
+// tertiary  = mint, used for draft badge and low-temperature callouts
 const config: Config = {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        primary: "#111827",
-        secondary: "#FFEDD5",
-        background: "#E5E7EB",
-        surface: "#FFFFFF",
-        accent: "#111827",
-        error: "#DC2626",
-        // Bumped from #6B7280 (gray-500) to #374151 (gray-700) so body copy
-        // is darker and easier to read; headings still use `primary` (#111827).
-        "text-primary": "#374151",
-        "text-secondary": "#FFFFFF",
+        primary: "#33272a",        // headline / stroke / button text (was #111827)
+        secondary: "#ffc6c7",      // soft pink chips + selected bg (was #FFEDD5)
+        background: "#faeee7",     // page cream (was #E5E7EB)
+        surface: "#fffffe",        // cards / panels (was #FFFFFF)
+        accent: "#ff8ba7",         // pink highlight / primary button (was #111827)
+        "accent-hover": "#e66a87", // deeper pink for btn hover
+        error: "#c83b3b",          // softened red (was #DC2626)
+        "text-primary": "#594a4e", // paragraph (was #374151)
+        "text-secondary": "#fffffe", // text on dark sidebar (kept light)
+        tertiary: "#c3f0ca",       // mint for draft badge (new)
+        "tertiary-dark": "#1a5a3f",// deep green on mint bg (new)
       },
       fontFamily: {
         sans: [
           "Inter",
           "'Noto Sans SC'",
-          // 系统中文字体栈作为 fallback：在 Noto Sans SC 加载完成前
-          // 直接用本机已有的字体，避免显示系统默认（如 Windows 宋体）
-          "'PingFang SC'", // macOS / iOS
-          "'Microsoft YaHei'", // Windows
-          "'Source Han Sans CN'", // Adobe 思源黑体
+          "'PingFang SC'",
+          "'Microsoft YaHei'",
+          "'Source Han Sans CN'",
           "system-ui",
           "sans-serif",
         ],

@@ -163,7 +163,7 @@ export function TestRunPanel({
       <button
         type="button"
         onClick={handleOpenToggle}
-        className="btn-pill bg-secondary text-primary border border-secondary hover:bg-orange-200 focus-visible:ring-secondary/50 font-medium"
+        className="btn-pill bg-secondary text-primary border border-secondary hover:bg-accent/60 focus-visible:ring-accent/40 font-medium"
         title="用当前提示词与 DeepSeek 多轮对话"
       >
         {open ? "收起试运行 ▴" : "试运行 ▾"}
@@ -194,7 +194,7 @@ export function TestRunPanel({
             </button>
             <div className="flex-1" />
             {tempContent != null && (
-              <span className="text-xs font-semibold bg-amber-200 text-amber-900 rounded-full px-2 py-0.5">
+              <span className="text-xs font-semibold bg-tertiary text-tertiary-dark rounded-full px-2 py-0.5">
                 临时编辑中
               </span>
             )}
@@ -203,7 +203,7 @@ export function TestRunPanel({
                 type="button"
                 onClick={() => setSaveExampleOpen(true)}
                 disabled={!hasCompleteExchange}
-                className="text-xs font-medium bg-secondary text-primary border border-secondary rounded-full px-3 py-1 hover:bg-orange-200 disabled:opacity-50"
+                className="text-xs font-medium bg-secondary text-primary border border-secondary rounded-full px-3 py-1 hover:bg-accent/60 disabled:opacity-50"
                 title={hasCompleteExchange ? "把这次对话存为示例，供同事参考" : "至少需要一轮 user→assistant 完整对话"}
               >
                 💾 保存为示例
@@ -221,7 +221,7 @@ export function TestRunPanel({
           </div>
 
           {hasMissingVariables && (
-            <div className="bg-amber-100 border border-amber-300 text-amber-800 text-sm font-medium rounded px-3 py-2 mb-3">
+            <div className="bg-tertiary/60 border border-tertiary-dark/30 text-tertiary-dark text-sm font-medium rounded px-3 py-2 mb-3">
               当前提示词包含未填写的变量，请先在上方"变量填写"区填完再开始对话。
             </div>
           )}
@@ -240,7 +240,7 @@ export function TestRunPanel({
                 <button
                   type="button"
                   onClick={discardTempEdit}
-                  className={`${pillBase} bg-surface text-error border border-error/40 hover:bg-red-50`}
+                  className={`${pillBase} bg-surface text-error border border-error/40 hover:bg-error/10`}
                 >
                   丢弃临时改动
                 </button>
@@ -248,7 +248,7 @@ export function TestRunPanel({
                   type="button"
                   onClick={saveTempToPrompt}
                   disabled={savingContent}
-                  className={`${pillBase} bg-primary text-white border border-primary hover:bg-gray-800`}
+                  className={`${pillBase} bg-primary text-text-secondary border border-primary hover:opacity-85`}
                 >
                   {savingContent ? "保存中..." : "保存到提示词"}
                 </button>
@@ -283,7 +283,7 @@ export function TestRunPanel({
                 <button
                   type="button"
                   onClick={applyTempEdit}
-                  className={`${pillBase} bg-primary text-white border border-primary hover:bg-gray-800`}
+                  className={`${pillBase} bg-primary text-text-secondary border border-primary hover:opacity-85`}
                 >
                   应用并清空对话
                 </button>
@@ -348,14 +348,14 @@ export function TestRunPanel({
               );
             })}
             {error && (
-              <div className="text-error text-sm font-medium bg-red-50 border border-red-200 rounded px-3 py-2">
+              <div className="text-error text-sm font-medium bg-error/10 border border-error/30 rounded px-3 py-2">
                 {error.message}
               </div>
             )}
           </div>
 
           {messages.length >= 20 && (
-            <p className="text-xs text-amber-700 mb-2 font-medium">
+            <p className="text-xs text-tertiary-dark mb-2 font-medium">
               对话已较长，可能影响响应速度，建议必要时清空对话。
             </p>
           )}

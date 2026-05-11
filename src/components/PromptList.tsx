@@ -46,7 +46,7 @@ export function PromptList({ prompts, selectedId, onSelect, onTagClick: _onTagCl
           data-prompt-item
           onClick={() => onSelect(prompt)}
           className={`prompt-item w-full text-left mb-1 rounded-lg relative overflow-hidden ${
-            selectedId === prompt.id ? "bg-secondary/50 shadow-subtle" : ""
+            selectedId === prompt.id ? "bg-accent/20 shadow-subtle" : ""
           }`}
         >
           <div className="relative z-10 px-3 py-2 rounded-lg transition-all duration-150">
@@ -56,7 +56,7 @@ export function PromptList({ prompts, selectedId, onSelect, onTagClick: _onTagCl
                 {prompt.title}
               </span>
               {prompt.is_draft && (
-                <span className="text-[10px] font-medium bg-amber-100 text-amber-700 rounded-full px-1.5 py-0.5 whitespace-nowrap shrink-0">
+                <span className="text-[10px] font-medium bg-tertiary text-tertiary-dark rounded-full px-1.5 py-0.5 whitespace-nowrap shrink-0">
                   📝 草稿
                 </span>
               )}

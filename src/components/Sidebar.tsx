@@ -47,7 +47,7 @@ export function Sidebar({
         </button>
         <button
           onClick={onNewPrompt}
-          className="w-9 h-9 flex items-center justify-center rounded-full bg-secondary text-primary hover:bg-orange-200 text-lg"
+          className="w-9 h-9 flex items-center justify-center rounded-full bg-secondary text-primary hover:bg-accent/60 text-lg"
           title="新建提示词"
           aria-label="新建提示词"
         >
@@ -91,7 +91,7 @@ export function Sidebar({
         />
         <button
           onClick={onNewPrompt}
-          className="w-full py-2 text-sm font-medium bg-secondary text-primary rounded-full hover:bg-orange-200 transition-colors duration-150 mb-4"
+          className="w-full py-2 text-sm font-medium bg-secondary text-primary rounded-full hover:bg-accent/60 transition-colors duration-150 mb-4"
         >
           + 新建提示词
         </button>

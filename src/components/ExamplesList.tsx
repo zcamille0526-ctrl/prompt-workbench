@@ -59,7 +59,7 @@ export function ExamplesList({ examples, isLoading, error, promptOwnerId, onDele
       {open && (
         <div className="mt-3 space-y-3">
           {error && (
-            <p className="text-error text-xs bg-red-50 border border-red-100 rounded px-3 py-2">
+            <p className="text-error text-xs bg-error/10 border border-error/20 rounded px-3 py-2">
               {error}
             </p>
           )}
