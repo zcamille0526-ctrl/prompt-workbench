@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 interface Props {
   sidebar: ReactNode;
@@ -6,8 +6,64 @@ interface Props {
   detail: ReactNode;
 }
 
+// Desktop list-column sizing. Persisted per tab so width / collapsed state
+// survive reloads and navigation inside one session.
+const LIST_WIDTH_KEY = "pw.listWidth";
+const LIST_COLLAPSED_KEY = "pw.listCollapsed";
+const LIST_WIDTH_DEFAULT = 320;
+const LIST_WIDTH_MIN = 200;
+const LIST_WIDTH_MAX = 600;
+
+function readStoredWidth(): number {
+  const raw = window.sessionStorage.getItem(LIST_WIDTH_KEY);
+  if (!raw) return LIST_WIDTH_DEFAULT;
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return LIST_WIDTH_DEFAULT;
+  return Math.min(LIST_WIDTH_MAX, Math.max(LIST_WIDTH_MIN, n));
+}
+
 export function Layout({ sidebar, list, detail }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [listCollapsed, setListCollapsed] = useState(
+    () => window.sessionStorage.getItem(LIST_COLLAPSED_KEY) === "1"
+  );
+  const [listWidth, setListWidth] = useState<number>(readStoredWidth);
+
+  useEffect(() => {
+    window.sessionStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
+  }, [listWidth]);
+  useEffect(() => {
+    window.sessionStorage.setItem(LIST_COLLAPSED_KEY, listCollapsed ? "1" : "0");
+  }, [listCollapsed]);
+
+  // Drag-to-resize. Pointer capture keeps tracking even if the cursor
+  // strays off the thin handle during fast drags.
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(0);
+
+  const onDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragStartX.current = e.clientX;
+    dragStartWidth.current = listWidth;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragStartWidth.current === 0) return;
+    const delta = e.clientX - dragStartX.current;
+    const next = Math.min(
+      LIST_WIDTH_MAX,
+      Math.max(LIST_WIDTH_MIN, dragStartWidth.current + delta)
+    );
+    setListWidth(next);
+  };
+  const onDragEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    dragStartWidth.current = 0;
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* noop */
+    }
+  };
 
   return (
     <div className="h-screen flex overflow-hidden bg-background p-2 gap-2">
@@ -39,10 +95,69 @@ export function Layout({ sidebar, list, detail }: Props) {
         <div className="h-full" onClick={() => setSidebarOpen(false)}>{sidebar}</div>
       </div>
 
-      {/* List */}
-      <div className="w-full md:w-80 flex flex-col bg-surface rounded-lg shadow-card overflow-hidden">
-        {list}
-      </div>
+      {/* Collapsed list: narrow strip with an expand button. Mobile ignores
+          collapsed state — users need the full list to navigate. */}
+      {listCollapsed && (
+        <div className="hidden md:flex flex-col items-center bg-surface rounded-lg shadow-card w-8 pt-3 flex-none">
+          <button
+            type="button"
+            onClick={() => setListCollapsed(false)}
+            className="p-1 rounded hover:bg-gray-100 text-text-primary/70 hover:text-primary"
+            aria-label="展开提示词列表"
+            title="展开提示词列表"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      )}
+
+      {/* Expanded list. On mobile stays full-width (default behavior).
+          On desktop uses the resizable listWidth; a collapse button sits
+          top-right and a drag handle on the right edge resizes it. */}
+      {!listCollapsed && (
+        <>
+          {/* Mobile list (w-full) */}
+          <div className="md:hidden w-full flex flex-col bg-surface rounded-lg shadow-card overflow-hidden">
+            {list}
+          </div>
+
+          {/* Desktop list with custom width + collapse button */}
+          <div
+            className="hidden md:flex flex-col bg-surface rounded-lg shadow-card overflow-hidden relative flex-none"
+            style={{ width: `${listWidth}px` }}
+          >
+            <button
+              type="button"
+              onClick={() => setListCollapsed(true)}
+              className="absolute top-2 right-2 z-10 p-1 rounded hover:bg-gray-100 text-text-primary/50 hover:text-primary"
+              aria-label="收起提示词列表"
+              title="收起提示词列表"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            {list}
+          </div>
+
+          {/* Drag handle between list and detail. 6px hit target, thin line
+              visible on hover so it's discoverable without being noisy. */}
+          <div
+            onPointerDown={onDragStart}
+            onPointerMove={onDragMove}
+            onPointerUp={onDragEnd}
+            onPointerCancel={onDragEnd}
+            className="hidden md:block w-1.5 cursor-col-resize group relative flex-none"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整提示词列表宽度"
+          >
+            <div className="absolute inset-y-2 left-1/2 -translate-x-1/2 w-0.5 bg-gray-200 group-hover:bg-primary/40 transition-colors rounded" />
+          </div>
+        </>
+      )}
 
       {/* Detail */}
       <div className="hidden md:flex flex-1 flex-col bg-surface rounded-lg shadow-card overflow-hidden">{detail}</div>
