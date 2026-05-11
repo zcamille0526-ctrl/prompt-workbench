@@ -209,6 +209,22 @@ describe("/api/profile/update — strict schema", () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it("rejects whitespace-only display_name (trim must run BEFORE min check)", async () => {
+    mockAuthenticated();
+    const req = makeReq({
+      authorization: "Bearer T",
+      body: { display_name: "   " },
+    });
+    const res = makeRes();
+    await handler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+    // Crucially, no UPDATE was issued — otherwise the DB would have
+    // received an empty display_name after the post-min trim.
+    expect(
+      bag.calls.find((c) => c.method === "update")
+    ).toBeUndefined();
+  });
+
   it("rejects display_name > 64 chars", async () => {
     mockAuthenticated();
     const req = makeReq({

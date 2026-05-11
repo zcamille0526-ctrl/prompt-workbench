@@ -13,10 +13,14 @@ const ENDPOINT = "/api/profile/update";
  * unknown keys — must produce a 400 rather than be silently dropped. This
  * mirrors the strict-reject style we use for prompts/examples and makes
  * both attack attempts and frontend bugs surface as visible errors.
+ *
+ * Order matters: trim() BEFORE min(1) so a body of "   " is rejected as
+ * empty rather than passing min(1) on the raw 3-char string and then being
+ * silently transformed into "" before the DB write.
  */
 const ProfileUpdateSchema = z
   .object({
-    display_name: z.string().min(1).max(64).trim(),
+    display_name: z.string().trim().min(1).max(64),
   })
   .strict();
 

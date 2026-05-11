@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { CurrentUserProvider, useCurrentUser } from "./hooks/useCurrentUser";
 import { usePrompts } from "./hooks/usePrompts";
 import { usePromptsPolling } from "./hooks/usePromptsPolling";
@@ -37,6 +37,23 @@ function AuthenticatedApp() {
   const [editingPrompt, setEditingPrompt] = useState<Prompt | undefined>();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Keep selectedPrompt in sync with the latest list snapshot. Without this,
+  // a rename (Settings → display_name) would refresh the list view but
+  // PromptDetail's "created人:旧名" / authoredness checks would stay stale
+  // until the user re-selected. Polling also runs through here cheaply —
+  // the list's freshly-joined creator profile becomes visible on the next
+  // tick without any manual reselect.
+  useEffect(() => {
+    if (!selectedPrompt) return;
+    const fresh = prompts.find((p) => p.id === selectedPrompt.id);
+    if (!fresh) return;
+    // Reference equality short-circuits the no-op case so we don't churn
+    // children that depend on the prompt object identity.
+    if (fresh !== selectedPrompt) {
+      setSelectedPrompt(fresh);
+    }
+  }, [prompts, selectedPrompt]);
 
   const filteredPrompts = useMemo(() => {
     let result = prompts;
@@ -201,7 +218,18 @@ function AuthenticatedApp() {
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        onProfileUpdated={fetchPrompts}
+        onProfileUpdated={() => {
+          // After a rename: refetch the list so created_by_name snapshots
+          // refresh, then drop the selection. Dropping selectedPrompt is
+          // the pragmatic fix for the "examples list shows old creator
+          // names" problem — useExamples is keyed on promptId and would
+          // otherwise keep its previous snapshot until the user navigates
+          // away and back. The user just confirmed a settings dialog so
+          // losing the selection is acceptable; re-selecting re-fetches
+          // examples with the fresh names.
+          void fetchPrompts();
+          setSelectedPrompt(null);
+        }}
       />
     </>
   );
