@@ -8,9 +8,12 @@ interface Props {
   onTagClick: (tag: string) => void;
 }
 
-export function PromptList({ prompts, selectedId, onSelect, onTagClick }: Props) {
+export function PromptList({ prompts, selectedId, onSelect, onTagClick: _onTagClick }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Radial light-follow effect: each card tracks the cursor via CSS custom
+  // properties so the hover highlight rides under the pointer. Cheap — just
+  // two style writes per card per mouse move, no layout thrash.
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const items = listRef.current?.querySelectorAll<HTMLElement>("[data-prompt-item]");
     if (!items) return;
@@ -42,13 +45,14 @@ export function PromptList({ prompts, selectedId, onSelect, onTagClick }: Props)
           key={prompt.id}
           data-prompt-item
           onClick={() => onSelect(prompt)}
-          className={`prompt-item w-full text-left mb-1.5 rounded-xl relative overflow-hidden ${
+          className={`prompt-item w-full text-left mb-1 rounded-lg relative overflow-hidden ${
             selectedId === prompt.id ? "bg-secondary/50 shadow-subtle" : ""
           }`}
         >
-          <div className={`relative z-10 p-3 rounded-xl transition-all duration-150`}>
+          <div className="relative z-10 px-3 py-2 rounded-lg transition-all duration-150">
+            {/* Row 1: title | draft badge | use count */}
             <div className="flex items-center gap-2">
-              <span className="font-medium text-sm text-primary truncate flex-1">
+              <span className="font-medium text-sm text-primary truncate flex-1 min-w-0">
                 {prompt.title}
               </span>
               {prompt.is_draft && (
@@ -56,33 +60,22 @@ export function PromptList({ prompts, selectedId, onSelect, onTagClick }: Props)
                   📝 草稿
                 </span>
               )}
-            </div>
-            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-              <span className="category-chip-soft">{prompt.category}</span>
-              {prompt.tags.slice(0, 3).map((tag) => (
-                <span
-                  key={tag}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onTagClick(tag);
-                  }}
-                  className="tag-chip-interactive"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-            <div className="flex items-end justify-between gap-2 mt-1.5">
-              <div className="text-xs text-text-primary truncate flex-1 min-w-0">
-                {prompt.content.length > 60
-                  ? `${prompt.content.slice(0, 60)}...`
-                  : prompt.content}
-              </div>
               {prompt.use_count > 0 && (
-                <span className="text-xs text-text-primary/60 shrink-0 flex items-center gap-0.5">
-                  ↻ {prompt.use_count}
+                <span className="text-[11px] text-text-primary/60 shrink-0 flex items-center gap-0.5 tabular-nums">
+                  ↻{prompt.use_count}
                 </span>
               )}
+            </div>
+            {/* Row 2: category chip inline with content preview */}
+            <div className="flex items-center gap-1.5 mt-1 text-xs text-text-primary/75 min-w-0">
+              <span className="category-chip-soft shrink-0 !py-0 !px-1.5 !text-[10px]">
+                {prompt.category}
+              </span>
+              <span className="truncate min-w-0">
+                {prompt.content.length > 40
+                  ? `${prompt.content.slice(0, 40)}...`
+                  : prompt.content}
+              </span>
             </div>
           </div>
         </button>
