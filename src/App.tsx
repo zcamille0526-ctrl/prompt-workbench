@@ -201,6 +201,7 @@ function AuthenticatedApp() {
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
+        onProfileUpdated={fetchPrompts}
       />
     </>
   );

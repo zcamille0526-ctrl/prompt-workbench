@@ -2,51 +2,103 @@ import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { getApiKey, setApiKey, clearApiKey } from "../lib/apiKey";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { updateProfile, AuthError } from "../lib/authClient";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Called after a successful display_name change. The dialog has already
+   * fed the new user into CurrentUserProvider, but the parent typically
+   * also wants to refetch prompts/examples since their created_by_name
+   * snapshots are stale.
+   */
+  onProfileUpdated?: () => void;
 }
 
 /**
- * Phase 2 Settings dialog: API key only.
+ * Settings: edit display_name (calls /api/profile/update) and DeepSeek API key.
  *
- * Display-name editing intentionally moved to Step 3 (spec §6.3) when the
- * /api/profile/update endpoint lands. Until then the user's name is shown
- * read-only here; renaming requires admin help via Supabase console.
+ * Save behavior:
+ *  - If display_name changed: PATCH /api/profile/update, push the returned
+ *    user into CurrentUserProvider, and notify the parent so it can refetch
+ *    lists whose created_by_name is now stale.
+ *  - If only the API key changed: write/clear it locally, no network call.
+ *  - If both: name first (the network one that can fail), then key.
+ *  - Save closes the dialog only on success; the API-key validation error
+ *    and any /api/profile/update failure stay visible.
  */
-export function SettingsDialog({ open, onOpenChange }: Props) {
+export function SettingsDialog({ open, onOpenChange, onProfileUpdated }: Props) {
   const currentUser = useCurrentUser();
-  const [apiKey, setApiKeyInput] = useState(() => getApiKey());
-  const [keyError, setKeyError] = useState<string | null>(null);
+  const initialName =
+    currentUser.status === "authenticated" ? currentUser.user.display_name : "";
+  const email =
+    currentUser.status === "authenticated" ? currentUser.user.email : "";
 
-  const handleSave = () => {
+  const [displayName, setDisplayName] = useState(initialName);
+  const [apiKey, setApiKeyInput] = useState(() => getApiKey());
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSave = async () => {
+    setNameError(null);
+    setKeyError(null);
+
+    const trimmedName = displayName.trim();
+    if (!trimmedName) {
+      setNameError("显示名不能为空");
+      return;
+    }
+    if (trimmedName.length > 64) {
+      setNameError("显示名最长 64 字符");
+      return;
+    }
+
     const trimmedKey = apiKey.trim();
     if (trimmedKey && trimmedKey.length < 16) {
       setKeyError("API Key 看起来不完整，请检查");
       return;
     }
 
-    if (trimmedKey) {
-      setApiKey(trimmedKey);
-    } else {
-      // empty string = explicit clear
-      clearApiKey();
-    }
+    setSubmitting(true);
+    try {
+      if (trimmedName !== initialName) {
+        const updated = await updateProfile({ display_name: trimmedName });
+        currentUser.setUser(updated);
+        onProfileUpdated?.();
+      }
 
-    onOpenChange(false);
+      if (trimmedKey) {
+        setApiKey(trimmedKey);
+      } else {
+        // empty string = explicit clear
+        clearApiKey();
+      }
+
+      onOpenChange(false);
+    } catch (err) {
+      if (err instanceof AuthError) {
+        setNameError(
+          err.code === "OTHER"
+            ? "保存失败，请稍后再试"
+            : "保存失败：" + err.message
+        );
+      } else {
+        setNameError("保存失败，请稍后再试");
+      }
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleCancel = () => {
+    setDisplayName(initialName);
     setApiKeyInput(getApiKey());
+    setNameError(null);
     setKeyError(null);
     onOpenChange(false);
   };
-
-  const displayName =
-    currentUser.status === "authenticated" ? currentUser.user.display_name : "";
-  const email =
-    currentUser.status === "authenticated" ? currentUser.user.email : "";
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -57,17 +109,26 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
             设置
           </Dialog.Title>
 
-          <div className="mt-4 text-sm text-text-primary space-y-1">
-            <div>
-              <span className="text-text-primary/70">显示名：</span>
-              <span className="font-medium">{displayName}</span>
-            </div>
-            <div>
-              <span className="text-text-primary/70">邮箱：</span>
-              <span className="font-mono text-xs">{email}</span>
-            </div>
-            <p className="text-xs text-text-primary/60 pt-1">
-              修改显示名将在后续版本支持。
+          <div className="mt-4">
+            <label className="text-sm font-medium text-text-primary">
+              显示名
+            </label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => {
+                setDisplayName(e.target.value);
+                setNameError(null);
+              }}
+              className="input-field mt-1"
+              maxLength={64}
+              disabled={submitting}
+            />
+            {nameError && (
+              <p className="text-error text-xs mt-2">{nameError}</p>
+            )}
+            <p className="text-xs text-text-primary/60 mt-1">
+              邮箱：<span className="font-mono">{email}</span>
             </p>
           </div>
 
@@ -84,6 +145,7 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
               }}
               placeholder="留空则清除已保存的 Key"
               className="input-field font-mono mt-1"
+              disabled={submitting}
             />
             {keyError && <p className="text-error text-xs mt-2">{keyError}</p>}
             <p className="text-xs text-text-primary/70 mt-1">
@@ -92,11 +154,19 @@ export function SettingsDialog({ open, onOpenChange }: Props) {
           </div>
 
           <div className="flex justify-end gap-2 mt-6">
-            <button onClick={handleCancel} className="btn-secondary">
+            <button
+              onClick={handleCancel}
+              className="btn-secondary"
+              disabled={submitting}
+            >
               取消
             </button>
-            <button onClick={handleSave} className="btn-primary">
-              保存
+            <button
+              onClick={handleSave}
+              className="btn-primary disabled:opacity-50"
+              disabled={submitting}
+            >
+              {submitting ? "保存中..." : "保存"}
             </button>
           </div>
         </Dialog.Content>

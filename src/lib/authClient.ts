@@ -68,8 +68,17 @@ async function postJson<T>(
   body: unknown,
   init: { authorization?: string } = {}
 ): Promise<T> {
+  return sendJson<T>(path, "POST", body, init);
+}
+
+async function sendJson<T>(
+  path: string,
+  method: "POST" | "PATCH",
+  body: unknown,
+  init: { authorization?: string } = {}
+): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: "POST",
+    method,
     headers: {
       "content-type": "application/json",
       ...(init.authorization
@@ -270,4 +279,20 @@ export async function fetchMe(): Promise<UserSummary> {
     );
   }
   return res.json();
+}
+
+/**
+ * Rename the current user. Server enforces Zod .strict() on the body and
+ * only writes display_name (api/profile/update.ts); the response is the
+ * fresh user summary so callers can hand it straight to
+ * currentUser.setUser().
+ */
+export async function updateProfile(input: {
+  display_name: string;
+}): Promise<UserSummary> {
+  const at = readAccess();
+  if (!at) throw new AuthError("INVALID_CREDENTIALS", "Not authenticated", 401);
+  return sendJson<UserSummary>("/api/profile/update", "PATCH", input, {
+    authorization: at,
+  });
 }
