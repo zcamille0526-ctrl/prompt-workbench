@@ -42,6 +42,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(403).json({ error: "forbidden" });
   }
 
+  if (req.method === "POST") {
+    const parsed = CategoryCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const issues = parsed.error.issues.map(
+        (i) => `${i.path.join(".") || "(root)"}: ${i.message}`,
+      );
+      safeLog({ endpoint: ENDPOINT, method: "POST", status: 400, errorCode: "ZOD" });
+      return badRequest(res, issues);
+    }
+    const { data, error } = await supabase.rpc("create_category", {
+      p_name: parsed.data.name,
+    });
+    if (error) {
+      if ((error as any).code === "23505") {
+        safeLog({ endpoint: ENDPOINT, method: "POST", status: 409, errorCode: "DUPLICATE" });
+        return res.status(409).json({ error: "duplicate_name" });
+      }
+      safeLog({ endpoint: ENDPOINT, method: "POST", status: 500, errorCode: "SUPABASE_RPC" });
+      return res.status(500).json({ error: (error as any).message ?? "RPC failed" });
+    }
+    safeLog({ endpoint: ENDPOINT, method: "POST", status: 201, durationMs: Date.now() - startedAt });
+    return res.status(201).json(data);
+  }
+
   safeLog({ endpoint: ENDPOINT, method: req.method, status: 405 });
   return res.status(405).json({ error: "Method not allowed" });
 }

@@ -141,3 +141,72 @@ describe("/api/categories — auth", () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+describe("POST /api/categories", () => {
+  it("admin can create, returns 201 + row", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: { id: "cat-1", name: "AI", display_order: 60,
+        created_at: "2026-05-12T00:00:00Z", updated_at: "2026-05-12T00:00:00Z" },
+      error: null,
+    });
+    const req = makeReq({
+      method: "POST", body: { name: "AI" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(201);
+    expect((res.body as any).name).toBe("AI");
+    expect(bag.rpc).toHaveBeenCalledWith("create_category", { p_name: "AI" });
+  });
+
+  it("whitespace-only name → 400", async () => {
+    mockAuthenticated(ADMIN_USER);
+    const req = makeReq({
+      method: "POST", body: { name: "   " },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("33-char name → 400", async () => {
+    mockAuthenticated(ADMIN_USER);
+    const req = makeReq({
+      method: "POST", body: { name: "x".repeat(33) },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("unknown field → 400 (strict schema)", async () => {
+    mockAuthenticated(ADMIN_USER);
+    const req = makeReq({
+      method: "POST", body: { name: "ok", sneaky: true },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("duplicate name (23505) → 409 duplicate_name", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: null,
+      error: { code: "23505", message: "duplicate key value" },
+    });
+    const req = makeReq({
+      method: "POST", body: { name: "生图" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(409);
+    expect((res.body as any).error).toBe("duplicate_name");
+  });
+});
