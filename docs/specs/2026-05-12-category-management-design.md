@@ -121,9 +121,11 @@ Migration 顺序：
 |---|---|---|---|
 | GET | `/api/categories` | 无认证 | 列出所有分类，按 display_order 升序 |
 | POST | `/api/categories` | admin | 新建分类 |
-| PATCH | `/api/categories/:id` | admin | 重命名分类 |
-| POST | `/api/categories/:id/move` | admin | 上/下移动一位 |
-| DELETE | `/api/categories/:id` | admin | 删除空分类 |
+| PATCH | `/api/categories?id=<uuid>` | admin | 重命名分类 |
+| POST | `/api/categories?id=<uuid>&action=move` | admin | 上/下移动一位 |
+| DELETE | `/api/categories?id=<uuid>` | admin | 删除空分类 |
+
+所有带 id 的变更走 query string，匹配项目里 `/api/prompts` / `/api/examples` 的既有约定（Vercel 文件路由 + 单文件 handler，不拆 `[id].ts`）。
 
 **权限实现**：所有写端点入口（与 `api/prompts.ts` / `api/examples.ts` 等现有端点保持一致）：
 ```ts
@@ -186,7 +188,7 @@ end;
 $$;
 ```
 
-### 3.4 PATCH /api/categories/:id
+### 3.4 PATCH /api/categories?id=&lt;uuid&gt;
 
 Body：`{ name: string }`（同样 `.trim().min(1).max(32).strict()`）
 
@@ -195,12 +197,13 @@ Body：`{ name: string }`（同样 `.trim().min(1).max(32).strict()`）
 实现：SQL function（放在 `008_category_rpc.sql` 里）：
 ```sql
 create or replace function rename_category(category_id uuid, new_name text)
-returns void
+returns categories
 language plpgsql
 security invoker
 as $$
 declare
   old_name text;
+  updated_row categories;
 begin
   -- FOR UPDATE 锁住这行。与 trigger 里的 FOR KEY SHARE 互斥：若此时
   -- 有 prompt insert/update 正在持锁，这里会等；若此时 rename 持锁，
@@ -210,15 +213,20 @@ begin
   if old_name is null then
     raise exception 'not_found' using errcode = 'P0002';
   end if;
-  if old_name = new_name then return; end if;  -- no-op
+  if old_name = new_name then
+    select * into updated_row from categories where id = category_id;
+    return updated_row;
+  end if;
 
   -- 顺序：先 categories 后 prompts。
   -- trigger `prompts_enforce_category` 只在 prompts INSERT/UPDATE of category
   -- 时触发；categories 的改名不触发它。第二条 UPDATE prompts 执行时，新名字
   -- 已经在 categories 里，trigger 通过。两条在同一 function 事务中，外部
   -- 会话看不到中间态。
-  update categories set name = new_name where id = category_id;
+  update categories set name = new_name where id = category_id
+    returning * into updated_row;
   update prompts set category = new_name where category = old_name;
+  return updated_row;
 end;
 $$;
 ```
@@ -228,9 +236,9 @@ API 层：
 2. 调 `rpc("rename_category", { category_id, new_name })`
 3. `P0002` → 404 not_found
 4. `23505` → 409 duplicate_name
-5. 成功 → 200 + 刷新后的记录
+5. 成功 → 200 + function 返回的刷新后记录（省一次 SELECT 往返）
 
-### 3.5 POST /api/categories/:id/move
+### 3.5 POST /api/categories?id=&lt;uuid&gt;&action=move
 
 Body：`{ direction: "up" | "down" }`
 
@@ -244,17 +252,21 @@ as $$
 declare
   cur record; neighbor record;
 begin
-  select * into cur from categories where id = category_id;
+  -- FOR UPDATE on both rows：与 trigger 的 FOR KEY SHARE 互斥，这样
+  -- 交换 display_order 不会与并发的 prompt insert/update 撞车。
+  select * into cur from categories where id = category_id for update;
   if cur is null then raise exception 'not_found' using errcode = 'P0002'; end if;
 
   if direction = 'up' then
     select * into neighbor from categories
       where display_order < cur.display_order
-      order by display_order desc limit 1;
+      order by display_order desc limit 1
+      for update;
   elsif direction = 'down' then
     select * into neighbor from categories
       where display_order > cur.display_order
-      order by display_order asc limit 1;
+      order by display_order asc limit 1
+      for update;
   else
     raise exception 'invalid_direction' using errcode = '22023';
   end if;
@@ -273,7 +285,7 @@ $$;
 
 API 层把 `P0001` 翻成 400 `{ error: "cannot_move" }`，`P0002` 翻 404，`22023` 翻 400。
 
-### 3.6 DELETE /api/categories/:id
+### 3.6 DELETE /api/categories?id=&lt;uuid&gt;
 
 调 `rpc("delete_category", { category_id })`，function 内把"检查引用"和"删除"放同事务，消除 TOCTOU：
 
