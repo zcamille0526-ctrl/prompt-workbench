@@ -42,6 +42,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(403).json({ error: "forbidden" });
   }
 
+  // IMPORTANT — ORDERING IS LOAD-BEARING: this branch MUST precede the plain
+  // POST (create) branch below. Both match req.method === "POST"; the first
+  // matching branch wins. If a future editor reorders them, every move request
+  // will be routed to create_category and move tests will fail with 201.
   if (req.method === "POST" && req.query.action === "move") {
     const id = req.query.id as string | undefined;
     if (!id) {
@@ -77,7 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).json({ error: (error as any).message ?? "RPC failed" });
     }
     safeLog({ endpoint: ENDPOINT, method: "POST", status: 200, durationMs: Date.now() - startedAt });
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ ok: true });
   }
 
   if (req.method === "POST") {
@@ -106,7 +110,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === "PATCH") {
     const id = req.query.id as string | undefined;
-    if (!id) return res.status(400).json({ error: "missing id" });
+    if (!id) {
+      safeLog({ endpoint: ENDPOINT, method: "PATCH", status: 400, errorCode: "MISSING_ID" });
+      return res.status(400).json({ error: "missing id" });
+    }
     const parsed = CategoryRenameSchema.safeParse(req.body);
     if (!parsed.success) {
       const issues = parsed.error.issues.map(
@@ -120,8 +127,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     if (error) {
       const code = (error as any).code;
-      if (code === "P0002") return res.status(404).json({ error: "not_found" });
-      if (code === "23505") return res.status(409).json({ error: "duplicate_name" });
+      if (code === "P0002") {
+        safeLog({ endpoint: ENDPOINT, method: "PATCH", status: 404, errorCode: "NOT_FOUND" });
+        return res.status(404).json({ error: "not_found" });
+      }
+      if (code === "23505") {
+        safeLog({ endpoint: ENDPOINT, method: "PATCH", status: 409, errorCode: "DUPLICATE" });
+        return res.status(409).json({ error: "duplicate_name" });
+      }
       safeLog({ endpoint: ENDPOINT, method: "PATCH", status: 500, errorCode: "SUPABASE_RPC" });
       return res.status(500).json({ error: (error as any).message ?? "RPC failed" });
     }
