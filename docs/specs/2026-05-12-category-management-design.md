@@ -66,21 +66,18 @@ Trigger 保证 `prompts.category` 写入值必须在 `categories.name` 集合中
 ```sql
 alter table public.categories enable row level security;
 
-create policy "categories_service_role_all" on categories
-  for all
-  using (auth.role() = 'service_role')
-  with check (auth.role() = 'service_role');
-
+-- Public read: 侧边栏加载分类 UI 不强求登录（登录前虽然看不到
+-- AuthenticatedApp，但 hook 提前绑定更简单）
 create policy "categories_public_read" on categories
   for select
   using (true);
+
+-- 不写 INSERT/UPDATE/DELETE 给 authenticated。所有写操作走 API + service_role。
+-- 不显式建 "service_role_all" 策略 —— service_role 在 Supabase 里本来就绕过 RLS，
+-- 加这条只是视觉噪音。
 ```
 
-理由：
-- **public_read**：侧边栏加载分类 UI 不强求登录（登录前虽然看不到 AuthenticatedApp，但 hook 提前绑定更简单，不需要按认证状态切换数据源）。
-- 所有写操作走 service_role + API 层 admin check，RLS 不放任何 UPDATE/DELETE/INSERT 给 authenticated 角色。
-
-### 2.4 Migration 010 内联预填 + 脏数据回填
+### 2.4 Migration 007 内联预填 + 脏数据回填
 
 Migration 顺序：
 
@@ -145,9 +142,29 @@ const CategoryCreateSchema = z.object({
 流程：
 1. `authenticate()` + admin check
 2. Parse body，失败 400
-3. `SELECT max(display_order) FROM categories` → 新建 `display_order = max + 10`
-4. INSERT；`23505`（unique_violation）→ 409 `{ error: "duplicate_name" }`
+3. 调 `rpc("create_category", { p_name: name })`，function 内 `SELECT COALESCE(max(display_order), 0) + 10` 与 INSERT 同事务，消除 TOCTOU
+4. `23505`（unique_violation）→ 409 `{ error: "duplicate_name" }`
 5. 返回 201 + 新记录
+
+Function 定义（008_category_rpc.sql）：
+```sql
+create or replace function create_category(p_name text)
+returns categories
+language plpgsql
+security invoker
+as $$
+declare
+  next_order integer;
+  row categories;
+begin
+  select coalesce(max(display_order), 0) + 10 into next_order from categories;
+  insert into categories (name, display_order)
+    values (p_name, next_order)
+    returning * into row;
+  return row;
+end;
+$$;
+```
 
 ### 3.4 PATCH /api/categories/:id
 
@@ -155,10 +172,13 @@ Body：`{ name: string }`（同样 `.trim().min(1).max(32).strict()`）
 
 **核心约束**：重命名必须原子 —— 要么 `categories.name` 和所有 `prompts.category` 都改，要么都不动。
 
-实现：SQL function（迁移 `011` 或放在同一个 migration 里）：
+实现：SQL function（放在 `008_category_rpc.sql` 里）：
 ```sql
 create or replace function rename_category(category_id uuid, new_name text)
-returns void as $$
+returns void
+language plpgsql
+security invoker
+as $$
 declare
   old_name text;
 begin
@@ -168,18 +188,16 @@ begin
   end if;
   if old_name = new_name then return; end if;  -- no-op
 
-  -- 1) 先把 prompts 的旧引用改掉（此时 new_name 可能还没在 categories 里，
-  --    trigger 会检查 — 所以要先放宽，或用 SET LOCAL 绕过。这里用
-  --    DEFER 方案：把 trigger 的时机推到 STATEMENT END，事务内连续两条 UPDATE
-  --    看到的中间态不触发检查。BUT plpgsql function 默认不是 constraint
-  --    trigger — 所以换成：先改 categories.name，再改 prompts.category。）
+  -- 顺序：先 categories 后 prompts。
+  -- trigger `prompts_enforce_category` 只在 prompts INSERT/UPDATE of category
+  -- 时触发；categories 的改名不触发它。第二条 UPDATE prompts 执行时，新名字
+  -- 已经在 categories 里，trigger 通过。两条在同一 function 事务中，外部
+  -- 会话看不到中间态。
   update categories set name = new_name where id = category_id;
   update prompts set category = new_name where category = old_name;
 end;
-$$ language plpgsql security definer;
+$$;
 ```
-
-**顺序关键**：先改 `categories.name`（此时 prompts 的旧 category 字符串暂时悬空 —— 但 trigger 只检查 **INSERT/UPDATE of category**，对 prompts 已有数据不重新扫，所以不会炸），再改 prompts 同步过去。两条 UPDATE 在同一 function 事务里。
 
 API 层：
 1. admin check → parse body
@@ -195,7 +213,10 @@ Body：`{ direction: "up" | "down" }`
 实现：SQL function
 ```sql
 create or replace function move_category(category_id uuid, direction text)
-returns void as $$
+returns void
+language plpgsql
+security invoker
+as $$
 declare
   cur record; neighbor record;
 begin
@@ -223,19 +244,45 @@ begin
   update categories set display_order = cur.display_order where id = neighbor.id;
   update categories set display_order = neighbor.display_order where id = cur.id;
 end;
-$$ language plpgsql security definer;
+$$;
 ```
 
 API 层把 `P0001` 翻成 400 `{ error: "cannot_move" }`，`P0002` 翻 404，`22023` 翻 400。
 
 ### 3.6 DELETE /api/categories/:id
 
-流程：
+调 `rpc("delete_category", { category_id })`，function 内把"检查引用"和"删除"放同事务，消除 TOCTOU：
+
+```sql
+create or replace function delete_category(category_id uuid)
+returns void
+language plpgsql
+security invoker
+as $$
+declare
+  cat_name text;
+  used_count integer;
+begin
+  select name into cat_name from categories where id = category_id;
+  if cat_name is null then
+    raise exception 'not_found' using errcode = 'P0002';
+  end if;
+  select count(*) into used_count from prompts where category = cat_name;
+  if used_count > 0 then
+    -- 用 P0001 + MESSAGE 带上计数，API 层解析
+    raise exception 'in_use:%', used_count using errcode = 'P0001';
+  end if;
+  delete from categories where id = category_id;
+end;
+$$;
+```
+
+API 层：
 1. admin check
-2. `SELECT count(*) FROM prompts WHERE category = (SELECT name FROM categories WHERE id = $1)`
-3. count > 0 → 409 `{ error: "in_use", used_by_count: N }`
-4. count == 0 → `DELETE FROM categories WHERE id = $1`
-5. 不存在 → 404
+2. 调 rpc
+3. `P0002` → 404 not_found
+4. `P0001` + message 以 `in_use:` 开头 → 409 `{ error: "in_use", used_by_count: N }`（解析 N）
+5. 成功 → 204
 
 ## 4. 前端
 
@@ -276,6 +323,8 @@ export function useCategories() {
 
 **保留 `schemas.ts` 的 `category: z.string().min(1)` 不变** —— 前端校验只保证非空，具体有效性由后端 trigger 兜底。避免前端分类缓存过期 → 误判有效输入。
 
+前端不给 `category` 加 `.trim()`。下拉选择产出的永远是准确值，用户无从输入空白。若未来改成 free-text 再考虑 trim。后端 trigger 对 `"  "` 自然判不存在、返回 400，UI 按 §4.4 提示即可。
+
 ### 4.3 SettingsDialog 管理员区
 
 SettingsDialog 内加一段：
@@ -312,6 +361,13 @@ SettingsDialog 内加一段：
 | 400 cannot_move | 理论上按钮已灰，硬出则 toast "已经在边界位置" |
 | 400 invalid_category（PromptForm 提交时） | 提示 "分类已被管理员删除，请重新选择" + 调 `refresh()` |
 
+#### 4.4.1 PromptForm 的"孤儿分类"
+
+编辑一条老提示词时，它的 `prompt.category` 可能已经被 admin 改名/删除（`useCategories()` 里不存在）。处理：
+- 下拉选项正常展示 `useCategories()` 的所有分类
+- 若 `prompt.category` 不在列表里，**额外在最前面插入一个标记项**：`<option value="旧名" disabled>旧名（已失效，请重新选择）</option>`，并且让 `<select>` 的默认值不选中它（显式渲染"请选择"占位）
+- 用户必须主动挑一个新分类才能提交，避免带着无效值 POST 到后端再触发 trigger
+
 ## 5. 测试
 
 ### 5.1 `tests/api/categories.test.ts`（新）
@@ -329,6 +385,7 @@ SettingsDialog 内加一段：
 | POST 未知字段 | 400（strict() 拒绝） |
 | PATCH 重命名成功 | 200；相应 prompts.category 全部同步 |
 | PATCH 重名 | 409 |
+| PATCH 未 trim 的 `"  生图  "` | 200 + 入库为 `生图`（trim 生效） |
 | PATCH 不存在 | 404 |
 | DELETE 空分类 | 204 |
 | DELETE 被引用 | 409 + used_by_count |
@@ -336,6 +393,8 @@ SettingsDialog 内加一段：
 | MOVE up 首位 | 400 cannot_move |
 | MOVE down 末位 | 400 cannot_move |
 | MOVE up 中间位 | 200 + display_order 与相邻项交换 |
+| MOVE direction 为 `"sideways"` | 400 invalid_direction |
+| MOVE 不存在 id | 404 |
 
 ### 5.2 `tests/lib/schemas.test.ts`（若新增 CategoryCreateSchema 导出）
 
@@ -351,7 +410,7 @@ SettingsDialog 内加一段：
 ### 6.1 Migration 文件
 
 - `supabase/migrations/007_category_management.sql`：建表 + 回填 + 预填 + trigger
-- `supabase/migrations/008_category_rpc.sql`：`rename_category` + `move_category` function
+- `supabase/migrations/008_category_rpc.sql`：`create_category` + `rename_category` + `move_category` + `delete_category` 四个 function
 
 分两份是为了让 function 改动能独立演进不扰动建表。
 
@@ -362,7 +421,10 @@ SettingsDialog 内加一段：
 3. 打开生产站验证：
    - 普通用户：侧边栏分类不变
    - 管理员：SettingsDialog 出现分类管理区
-4. 回滚计划：若发现问题，`drop trigger prompts_enforce_category on prompts; drop table categories cascade;` 即可还原。前端 `CATEGORIES` 常量已删，需要 hotfix 加回。
+4. 回滚计划：
+   - **若需要回滚，必须先前端后数据库**：先 revert 包含 `CATEGORIES` 常量删除 + useCategories 接入的 commit（让前端退回硬编码 5 条），再 `drop trigger prompts_enforce_category on prompts; drop function rename_category, move_category, create_category, delete_category; drop table categories cascade;`
+   - 单独 drop 表不 revert 前端 → Sidebar/PromptForm 渲染空列表，用户无法选分类
+   - 反过来 revert 前端但保留表和 trigger → 无害（前端不调 /api/categories 也不会写），只是多了个未用表
 
 ## 7. 非目标
 
@@ -374,5 +436,5 @@ SettingsDialog 内加一段：
 
 ## 8. 开放问题（留待实施时决定）
 
-- `rename_category` function 用 `security definer` 是为了让 service_role 调用简洁；如发现需要 RLS 上下文（目前不需要），再降级成 `security invoker`。
-- 删除 `CATEGORIES` 常量可能触达多个文件的 import 路径；如果 TypeScript 推断出问题，在 `constants.ts` 留 `export type Category = string` 作 type-only 出口。
+- 若 `CATEGORIES` 常量删除导致 TypeScript 类型推断出问题，在 `constants.ts` 留 `export type Category = string` 作 type-only 出口即可。
+- Migration 007 的回填脚本遇到 `prompts` 表为空时照常执行（空 SELECT 不产生 INSERT 行），无需特殊处理。
