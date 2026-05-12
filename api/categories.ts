@@ -42,6 +42,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(403).json({ error: "forbidden" });
   }
 
+  if (req.method === "POST" && req.query.action === "move") {
+    const id = req.query.id as string | undefined;
+    if (!id) {
+      safeLog({ endpoint: ENDPOINT, method: "POST", status: 400, errorCode: "MISSING_ID" });
+      return res.status(400).json({ error: "missing id" });
+    }
+    const parsed = CategoryMoveSchema.safeParse(req.body);
+    if (!parsed.success) {
+      safeLog({ endpoint: ENDPOINT, method: "POST", status: 400, errorCode: "ZOD" });
+      return badRequest(
+        res,
+        parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`),
+      );
+    }
+    const { error } = await supabase.rpc("move_category", {
+      category_id: id, direction: parsed.data.direction,
+    });
+    if (error) {
+      const code = (error as any).code;
+      if (code === "P0002") {
+        safeLog({ endpoint: ENDPOINT, method: "POST", status: 404, errorCode: "NOT_FOUND" });
+        return res.status(404).json({ error: "not_found" });
+      }
+      if (code === "P0001") {
+        safeLog({ endpoint: ENDPOINT, method: "POST", status: 400, errorCode: "CANNOT_MOVE" });
+        return res.status(400).json({ error: "cannot_move" });
+      }
+      if (code === "22023") {
+        safeLog({ endpoint: ENDPOINT, method: "POST", status: 400, errorCode: "INVALID_DIRECTION" });
+        return res.status(400).json({ error: "invalid_direction" });
+      }
+      safeLog({ endpoint: ENDPOINT, method: "POST", status: 500, errorCode: "SUPABASE_RPC" });
+      return res.status(500).json({ error: (error as any).message ?? "RPC failed" });
+    }
+    safeLog({ endpoint: ENDPOINT, method: "POST", status: 200, durationMs: Date.now() - startedAt });
+    return res.status(200).json({ success: true });
+  }
+
   if (req.method === "POST") {
     const parsed = CategoryCreateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -89,6 +127,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     safeLog({ endpoint: ENDPOINT, method: "PATCH", status: 200, durationMs: Date.now() - startedAt });
     return res.status(200).json(data);
+  }
+
+  if (req.method === "DELETE") {
+    const id = req.query.id as string | undefined;
+    if (!id) {
+      safeLog({ endpoint: ENDPOINT, method: "DELETE", status: 400, errorCode: "MISSING_ID" });
+      return res.status(400).json({ error: "missing id" });
+    }
+    const { error } = await supabase.rpc("delete_category", {
+      category_id: id,
+    });
+    if (error) {
+      const code = (error as any).code;
+      if (code === "P0002") {
+        safeLog({ endpoint: ENDPOINT, method: "DELETE", status: 404, errorCode: "NOT_FOUND" });
+        return res.status(404).json({ error: "not_found" });
+      }
+      if (code === "P0001") {
+        const msg = String((error as any).message ?? "");
+        const m = msg.match(/^in_use:(\d+)/);
+        const used_by_count = m ? parseInt(m[1], 10) : 0;
+        safeLog({ endpoint: ENDPOINT, method: "DELETE", status: 409, errorCode: "IN_USE" });
+        return res.status(409).json({ error: "in_use", used_by_count });
+      }
+      safeLog({ endpoint: ENDPOINT, method: "DELETE", status: 500, errorCode: "SUPABASE_RPC" });
+      return res.status(500).json({ error: (error as any).message ?? "RPC failed" });
+    }
+    safeLog({ endpoint: ENDPOINT, method: "DELETE", status: 204, durationMs: Date.now() - startedAt });
+    return res.status(204).end();
   }
 
   safeLog({ endpoint: ENDPOINT, method: req.method, status: 405 });

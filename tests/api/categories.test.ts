@@ -62,6 +62,7 @@ function makeRes() {
   const res: any = { statusCode: 0, body: undefined };
   res.status = vi.fn((c: number) => { res.statusCode = c; return res; });
   res.json = vi.fn((d: unknown) => { res.body = d; return res; });
+  res.end = vi.fn(() => res);
   return res;
 }
 
@@ -283,5 +284,137 @@ describe("PATCH /api/categories", () => {
     await categoriesHandler(req, res as unknown as VercelResponse);
     expect(res.statusCode).toBe(409);
     expect((res.body as any).error).toBe("duplicate_name");
+  });
+});
+
+describe("POST /api/categories/:id/move", () => {
+  it("admin can move up, returns 200", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({ data: null, error: null });
+    const req = makeReq({
+      method: "POST", body: { direction: "up" },
+      query: { id: "cat-1", action: "move" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
+    expect(bag.rpc).toHaveBeenCalledWith("move_category", {
+      category_id: "cat-1", direction: "up",
+    });
+  });
+
+  it("cannot_move (P0001) at top → 400", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: null,
+      error: { code: "P0001", message: "cannot_move" },
+    });
+    const req = makeReq({
+      method: "POST", body: { direction: "up" },
+      query: { id: "cat-1", action: "move" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+    expect((res.body as any).error).toBe("cannot_move");
+  });
+
+  it("invalid direction (22023) → 400", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: null,
+      error: { code: "22023", message: "invalid_direction" },
+    });
+    const req = makeReq({
+      method: "POST", body: { direction: "up" },
+      query: { id: "cat-1", action: "move" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("non-existent id (P0002) → 404", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: null,
+      error: { code: "P0002", message: "not_found" },
+    });
+    const req = makeReq({
+      method: "POST", body: { direction: "up" },
+      query: { id: "nope", action: "move" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("schema-invalid direction → 400 before RPC", async () => {
+    mockAuthenticated(ADMIN_USER);
+    const req = makeReq({
+      method: "POST", body: { direction: "sideways" },
+      query: { id: "cat-1", action: "move" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(400);
+    expect(bag.rpc).not.toHaveBeenCalled();
+  });
+});
+
+describe("DELETE /api/categories", () => {
+  it("empty category → 204", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({ data: null, error: null });
+    const req = makeReq({
+      method: "DELETE",
+      query: { id: "cat-1" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(204);
+    expect(bag.rpc).toHaveBeenCalledWith("delete_category", {
+      category_id: "cat-1",
+    });
+  });
+
+  it("in-use → 409 with used_by_count", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: null,
+      error: { code: "P0001", message: "in_use:7" },
+    });
+    const req = makeReq({
+      method: "DELETE",
+      query: { id: "cat-1" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(409);
+    expect((res.body as any).error).toBe("in_use");
+    expect((res.body as any).used_by_count).toBe(7);
+  });
+
+  it("not found (P0002) → 404", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: null,
+      error: { code: "P0002", message: "not_found" },
+    });
+    const req = makeReq({
+      method: "DELETE",
+      query: { id: "nope" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(404);
   });
 });
