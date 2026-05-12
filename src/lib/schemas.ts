@@ -94,3 +94,39 @@ export interface Example {
   created_by_name: string;
   created_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// Category admin API schemas
+//
+// .trim() runs BEFORE .min(1) so "   " is normalized to "" and fails length.
+// (Codex P2-1 incident: the reverse order let whitespace-only names through.)
+
+export const CategoryCreateSchema = z
+  .object({
+    name: z.string().trim().min(1, "名称不能为空").max(32, "名称过长"),
+  })
+  .strict();
+
+export const CategoryRenameSchema = z
+  .object({
+    name: z.string().trim().min(1, "名称不能为空").max(32, "名称过长"),
+  })
+  .strict();
+
+export const CategoryMoveSchema = z
+  .object({
+    direction: z.enum(["up", "down"]),
+  })
+  .strict();
+
+export type CategoryCreateInput = z.infer<typeof CategoryCreateSchema>;
+export type CategoryRenameInput = z.infer<typeof CategoryRenameSchema>;
+export type CategoryMoveInput = z.infer<typeof CategoryMoveSchema>;
+
+export interface Category {
+  id: string;
+  name: string;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { PromptSchema, VariableSchema } from "../../src/lib/schemas";
+import {
+  PromptSchema,
+  VariableSchema,
+  CategoryCreateSchema,
+  CategoryRenameSchema,
+  CategoryMoveSchema,
+} from "../../src/lib/schemas";
 
 describe("VariableSchema", () => {
   it("accepts valid variable", () => {
@@ -77,5 +83,50 @@ describe("PromptSchema", () => {
       variables: [{ name: "x" }, { name: "x" }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("CategoryCreateSchema", () => {
+  it("accepts a normal name", () => {
+    const r = CategoryCreateSchema.safeParse({ name: "新分类" });
+    expect(r.success).toBe(true);
+  });
+  it("trims surrounding whitespace before min()", () => {
+    const r = CategoryCreateSchema.safeParse({ name: "   " });
+    expect(r.success).toBe(false);
+  });
+  it("rejects names longer than 32 chars", () => {
+    const r = CategoryCreateSchema.safeParse({ name: "x".repeat(33) });
+    expect(r.success).toBe(false);
+  });
+  it("rejects unknown fields (strict)", () => {
+    const r = CategoryCreateSchema.safeParse({ name: "ok", sneaky: 1 });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe("CategoryRenameSchema", () => {
+  it("accepts a normal name and trims", () => {
+    const r = CategoryRenameSchema.safeParse({ name: "  新名  " });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.name).toBe("新名");
+  });
+  it("rejects empty after trim", () => {
+    expect(CategoryRenameSchema.safeParse({ name: "" }).success).toBe(false);
+  });
+  it("rejects unknown fields", () => {
+    expect(
+      CategoryRenameSchema.safeParse({ name: "ok", extra: 1 }).success,
+    ).toBe(false);
+  });
+});
+
+describe("CategoryMoveSchema", () => {
+  it("accepts up/down", () => {
+    expect(CategoryMoveSchema.safeParse({ direction: "up" }).success).toBe(true);
+    expect(CategoryMoveSchema.safeParse({ direction: "down" }).success).toBe(true);
+  });
+  it("rejects sideways", () => {
+    expect(CategoryMoveSchema.safeParse({ direction: "sideways" }).success).toBe(false);
   });
 });
