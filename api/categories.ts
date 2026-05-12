@@ -1,0 +1,47 @@
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import {
+  CategoryCreateSchema,
+  CategoryRenameSchema,
+  CategoryMoveSchema,
+} from "../src/lib/schemas.js";
+import { authenticate } from "./lib/auth.js";
+import { getServiceRoleClient } from "./lib/supabase.js";
+import { safeLog } from "./lib/log.js";
+
+const ENDPOINT = "/api/categories";
+
+function badRequest(res: VercelResponse, issues: string[]) {
+  return res.status(400).json({ error: "Invalid payload", details: issues });
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const startedAt = Date.now();
+  const supabase = getServiceRoleClient();
+
+  if (req.method === "GET") {
+    const { data, error } = await supabase
+      .from("categories")
+      .select("*")
+      .order("display_order", { ascending: true });
+    if (error) {
+      safeLog({ endpoint: ENDPOINT, method: "GET", status: 500, errorCode: "SUPABASE_SELECT" });
+      return res.status(500).json({ error: error.message });
+    }
+    safeLog({ endpoint: ENDPOINT, method: "GET", status: 200, durationMs: Date.now() - startedAt });
+    return res.status(200).json({ categories: data ?? [] });
+  }
+
+  // All other methods are admin-only.
+  const user = await authenticate(req);
+  if (!user) {
+    safeLog({ endpoint: ENDPOINT, method: req.method, status: 401 });
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  if (!user.is_admin) {
+    safeLog({ endpoint: ENDPOINT, method: req.method, status: 403, errorCode: "NOT_ADMIN" });
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  safeLog({ endpoint: ENDPOINT, method: req.method, status: 405 });
+  return res.status(405).json({ error: "Method not allowed" });
+}
