@@ -5,6 +5,7 @@ import promptsHandler from "./api/prompts.js";
 import useCountHandler from "./api/use-count.js";
 import chatHandler from "./api/chat.js";
 import examplesHandler from "./api/examples.js";
+import categoriesHandler from "./api/categories.js";
 import signupHandler from "./api/auth/signup.js";
 import setupAccountHandler from "./api/auth/setup-account.js";
 import loginHandler from "./api/auth/login.js";
@@ -39,6 +40,7 @@ app.all("/api/prompts", adapt(promptsHandler));
 app.post("/api/use-count", adapt(useCountHandler));
 app.post("/api/chat", adapt(chatHandler));
 app.all("/api/examples", adapt(examplesHandler));
+app.all("/api/categories", adapt(categoriesHandler));
 
 // Phase 2 auth routes (Step 1). Vercel routes /api/auth/<x>.ts to
 // /api/auth/<x>; mirror that here so AuthScreen / AuthCallback work
