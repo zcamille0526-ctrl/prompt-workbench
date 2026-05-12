@@ -210,3 +210,78 @@ describe("POST /api/categories", () => {
     expect((res.body as any).error).toBe("duplicate_name");
   });
 });
+
+describe("PATCH /api/categories", () => {
+  it("admin can rename, returns 200", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: { id: "cat-1", name: "图像生成", display_order: 20,
+        created_at: "x", updated_at: "x" },
+      error: null,
+    });
+    const req = makeReq({
+      method: "PATCH", body: { name: "图像生成" },
+      query: { id: "cat-1" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
+    expect(bag.rpc).toHaveBeenCalledWith("rename_category", {
+      category_id: "cat-1", new_name: "图像生成",
+    });
+  });
+
+  it("trims leading/trailing whitespace", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: { id: "cat-1", name: "生图", display_order: 20,
+        created_at: "x", updated_at: "x" },
+      error: null,
+    });
+    const req = makeReq({
+      method: "PATCH", body: { name: "  生图  " },
+      query: { id: "cat-1" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(200);
+    expect(bag.rpc).toHaveBeenCalledWith("rename_category", {
+      category_id: "cat-1", new_name: "生图",
+    });
+  });
+
+  it("not found (P0002) → 404", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: null,
+      error: { code: "P0002", message: "not_found" },
+    });
+    const req = makeReq({
+      method: "PATCH", body: { name: "x" },
+      query: { id: "no-such" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("duplicate name (23505) → 409", async () => {
+    mockAuthenticated(ADMIN_USER);
+    bag.rpc.mockResolvedValue({
+      data: null,
+      error: { code: "23505", message: "duplicate" },
+    });
+    const req = makeReq({
+      method: "PATCH", body: { name: "生图" },
+      query: { id: "cat-1" },
+      authorization: "Bearer T",
+    });
+    const res = makeRes();
+    await categoriesHandler(req, res as unknown as VercelResponse);
+    expect(res.statusCode).toBe(409);
+    expect((res.body as any).error).toBe("duplicate_name");
+  });
+});

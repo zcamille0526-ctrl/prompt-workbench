@@ -66,6 +66,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(201).json(data);
   }
 
+  if (req.method === "PATCH") {
+    const id = req.query.id as string | undefined;
+    if (!id) return res.status(400).json({ error: "missing id" });
+    const parsed = CategoryRenameSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const issues = parsed.error.issues.map(
+        (i) => `${i.path.join(".") || "(root)"}: ${i.message}`,
+      );
+      safeLog({ endpoint: ENDPOINT, method: "PATCH", status: 400, errorCode: "ZOD" });
+      return badRequest(res, issues);
+    }
+    const { data, error } = await supabase.rpc("rename_category", {
+      category_id: id, new_name: parsed.data.name,
+    });
+    if (error) {
+      const code = (error as any).code;
+      if (code === "P0002") return res.status(404).json({ error: "not_found" });
+      if (code === "23505") return res.status(409).json({ error: "duplicate_name" });
+      safeLog({ endpoint: ENDPOINT, method: "PATCH", status: 500, errorCode: "SUPABASE_RPC" });
+      return res.status(500).json({ error: (error as any).message ?? "RPC failed" });
+    }
+    safeLog({ endpoint: ENDPOINT, method: "PATCH", status: 200, durationMs: Date.now() - startedAt });
+    return res.status(200).json(data);
+  }
+
   safeLog({ endpoint: ENDPOINT, method: req.method, status: 405 });
   return res.status(405).json({ error: "Method not allowed" });
 }
