@@ -14,9 +14,10 @@ interface Props {
   onDelete: () => void;
   onTogglePublish: (next: boolean) => Promise<void>;
   onSaveContent: (content: string) => Promise<void>;
+  onTagClick: (tag: string) => void;
 }
 
-export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSaveContent }: Props) {
+export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSaveContent, onTagClick }: Props) {
   const currentUser = useCurrentUser();
   const variables = useMemo(
     () => extractVariables(prompt.content),
@@ -113,16 +114,21 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
               </span>
             )}
           </div>
-          {/* Meta row: category and tags share visual weight */}
+          {/* Meta row: category (bright, saturated) and tags (muted, clickable) */}
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <span className="category-chip-soft">{prompt.category}</span>
+            <span className="category-chip">{prompt.category}</span>
             {prompt.tags.length > 0 && (
               <>
                 <span className="text-gray-300 text-xs">·</span>
                 {prompt.tags.map((tag) => (
-                  <span key={tag} className="tag-chip">
+                  <button
+                    key={tag}
+                    onClick={() => onTagClick(tag)}
+                    className="tag-chip-muted-interactive"
+                    title="筛选含此标签的提示词"
+                  >
                     {tag}
-                  </span>
+                  </button>
                 ))}
               </>
             )}

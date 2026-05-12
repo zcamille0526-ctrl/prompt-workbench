@@ -189,6 +189,7 @@ function AuthenticatedApp() {
               onDelete={() => setDeleteOpen(true)}
               onTogglePublish={handleTogglePublish}
               onSaveContent={handleSaveContent}
+              onTagClick={handleTagClick}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-text-primary text-sm">

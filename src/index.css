@@ -45,12 +45,16 @@
            active:scale-[0.98];
   }
 
-  /* Primary action: pink bg with dark text, 1px stroke so the button still
-     has a clear edge against the cream page background (the pink alone is
-     only ~2.6:1 against the page — the stroke is what keeps it legible). */
+  /* Primary action: pink pill lifted off the cream page with a double shadow.
+     Inner shadow gives it edge definition (replacing the old harsh stroke),
+     outer pink-tinted shadow makes it feel "raised" and coherent with the
+     palette. Hover deepens both layers. */
   .btn-primary {
-    @apply btn-pill bg-accent text-primary border border-primary/90
-           hover:bg-accent-hover focus-visible:ring-accent/40;
+    @apply btn-pill bg-accent text-primary
+           shadow-[0_1px_2px_rgba(51,39,42,0.12),0_3px_10px_rgba(255,139,167,0.35)]
+           hover:bg-accent-hover
+           hover:shadow-[0_2px_4px_rgba(51,39,42,0.16),0_6px_14px_rgba(255,139,167,0.45)]
+           focus-visible:ring-accent/40;
   }
 
   .btn-secondary {
@@ -81,6 +85,18 @@
 
   .tag-chip {
     @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-secondary text-primary;
+  }
+
+  /* Muted tag for the detail header, where the filled `category-chip`
+     already carries the eye — tags sit beside it as secondary metadata. */
+  .tag-chip-muted {
+    @apply inline-block text-xs font-medium px-2 py-0.5 rounded-full
+           bg-transparent border border-primary/25 text-primary/70
+           transition-colors duration-150;
+  }
+
+  .tag-chip-muted-interactive {
+    @apply tag-chip-muted cursor-pointer hover:bg-accent/15 hover:text-primary hover:border-primary/45;
   }
 
   .tag-chip-interactive {

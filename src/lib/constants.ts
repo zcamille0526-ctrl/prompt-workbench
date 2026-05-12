@@ -1,4 +1,4 @@
-export const CATEGORIES = ["生图", "生文", "分析", "开发", "元提示词"] as const;
+export const CATEGORIES = ["元提示词", "生图", "生文", "分析", "开发"] as const;
 
 export type Category = (typeof CATEGORIES)[number];
 
