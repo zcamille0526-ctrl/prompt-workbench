@@ -8,11 +8,14 @@ create or replace function create_category(p_name text)
 returns categories
 language plpgsql
 security invoker
+set search_path = public
 as $$
 declare
   next_order integer;
   new_row categories;
 begin
+  -- Name validation (trim, length, strict unknown fields) lives in the API
+  -- layer Zod schema. This RPC trusts its input.
   -- Serialize concurrent admins so they can't read the same max(display_order)
   -- and both insert the same next_order. Auto-released at transaction end.
   perform pg_advisory_xact_lock(hashtext('categories.display_order'));
@@ -29,6 +32,7 @@ create or replace function rename_category(category_id uuid, new_name text)
 returns categories
 language plpgsql
 security invoker
+set search_path = public
 as $$
 declare
   old_name text;
@@ -37,14 +41,12 @@ begin
   -- FOR UPDATE on categories row. Mutually exclusive with the trigger's
   -- FOR KEY SHARE: concurrent prompt writes wait until rename commits, or
   -- this rename waits until any in-flight prompt write commits.
-  select name into old_name from categories where id = category_id for update;
-  if old_name is null then
+  select * into updated_row from categories where id = category_id for update;
+  if not found then
     raise exception 'not_found' using errcode = 'P0002';
   end if;
-  if old_name = new_name then
-    select * into updated_row from categories where id = category_id;
-    return updated_row;
-  end if;
+  old_name := updated_row.name;
+  if old_name = new_name then return updated_row; end if;
 
   -- Order matters: UPDATE categories first. The trigger only fires on
   -- prompts INSERT/UPDATE of category, not on categories itself. The second
@@ -62,13 +64,15 @@ create or replace function move_category(category_id uuid, direction text)
 returns void
 language plpgsql
 security invoker
+set search_path = public
 as $$
 declare
   cur record;
   neighbor record;
 begin
+  perform pg_advisory_xact_lock(hashtext('categories.display_order'));
   select * into cur from categories where id = category_id for update;
-  if cur is null then
+  if not found then
     raise exception 'not_found' using errcode = 'P0002';
   end if;
 
@@ -90,8 +94,10 @@ begin
     raise exception 'cannot_move' using errcode = 'P0001';
   end if;
 
-  -- Two-phase swap with a sentinel so that, if a unique index on
-  -- display_order is ever added, the swap stays safe.
+  -- Two-phase swap via a sentinel. Not strictly required today (no unique
+  -- index on display_order), but keeps the shape robust if one is added.
+  -- The sentinel -1 assumes no live row uses it; display_order should
+  -- always be positive in normal operation.
   update categories set display_order = -1 where id = cur.id;
   update categories set display_order = cur.display_order where id = neighbor.id;
   update categories set display_order = neighbor.display_order where id = cur.id;
@@ -102,13 +108,14 @@ create or replace function delete_category(category_id uuid)
 returns void
 language plpgsql
 security invoker
+set search_path = public
 as $$
 declare
   cat_name text;
   used_count integer;
 begin
   select name into cat_name from categories where id = category_id for update;
-  if cat_name is null then
+  if not found then
     raise exception 'not_found' using errcode = 'P0002';
   end if;
   select count(*) into used_count from prompts where category = cat_name;
@@ -118,3 +125,8 @@ begin
   delete from categories where id = category_id;
 end;
 $$;
+
+revoke execute on function create_category(text) from public, anon, authenticated;
+revoke execute on function rename_category(uuid, text) from public, anon, authenticated;
+revoke execute on function move_category(uuid, text) from public, anon, authenticated;
+revoke execute on function delete_category(uuid) from public, anon, authenticated;
