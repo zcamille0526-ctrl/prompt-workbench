@@ -45,8 +45,17 @@ create trigger categories_updated_at
 ```sql
 create or replace function enforce_category_exists()
 returns trigger as $$
+declare
+  found_id uuid;
 begin
-  if not exists (select 1 from categories where name = new.category) then
+  -- FOR KEY SHARE：锁住被引用的 categories 行的 key（id/name）。
+  -- 这让并发的 delete_category / rename_category（它们拿 FOR UPDATE）
+  -- 必须等当前 prompt insert/update 提交后才能改分类，关闭了
+  -- "trigger 看到分类存在 → 同时 admin 删分类 → 提交后引用悬空" 的窗口。
+  select id into found_id from categories
+    where name = new.category
+    for key share;
+  if found_id is null then
     raise exception 'category "%" does not exist', new.category
       using errcode = '23503';
   end if;
@@ -59,7 +68,7 @@ create trigger prompts_enforce_category
   for each row execute function enforce_category_exists();
 ```
 
-Trigger 保证 `prompts.category` 写入值必须在 `categories.name` 集合中。写操作违反时 `errcode = '23503'`（foreign_key_violation），API 层捕获后返回 400。
+Trigger 保证 `prompts.category` 写入值必须在 `categories.name` 集合中，且通过行级锁与 `delete_category` / `rename_category` 互斥。写操作违反时 `errcode = '23503'`（foreign_key_violation），API 层捕获后返回 400。
 
 ### 2.3 RLS
 
@@ -82,24 +91,27 @@ create policy "categories_public_read" on categories
 Migration 顺序：
 
 1. 创建 `categories` 表
-2. **先回填**：把 prompts 里现存的 distinct category 值塞进 categories，避免 trigger 安装时老数据违约
-   ```sql
-   insert into categories (name, display_order)
-     select distinct category, row_number() over (order by category) * 10
-     from prompts
-     on conflict (name) do nothing;
-   ```
-3. **再合并预填**（5 条规范分类，覆盖旧数据未覆盖的情况）：
+2. **先插入 5 条规范分类**，占用 display_order 10/20/30/40/50：
    ```sql
    insert into categories (name, display_order) values
-     ('元提示词', 10), ('生图', 20), ('生文', 30), ('分析', 40), ('开发', 50)
-   on conflict (name) do update
-     set display_order = excluded.display_order;
+     ('元提示词', 10), ('生图', 20), ('生文', 30), ('分析', 40), ('开发', 50);
    ```
-   冲突时用预填顺序覆盖（让 5 条规范分类拿到预期顺序；回填出来的其他分类已有 `display_order`，不在这 5 条里就不 touch）。
+3. **再回填非规范分类**（旧数据里可能有规范 5 条之外的遗留分类），从 display_order = 60 起步，避免与规范分类重号：
+   ```sql
+   insert into categories (name, display_order)
+     select distinct category,
+            60 + (row_number() over (order by category) - 1) * 10
+     from prompts
+   on conflict (name) do nothing;
+   ```
+   `on conflict do nothing`：遇到规范分类（已在步骤 2 插入）时跳过。
 4. 安装 trigger：保证之后的写操作遵守约束。
 
-理由：**先回填再安 trigger**，这样不需要 `ALTER TABLE prompts VALIDATE CONSTRAINT` 之类的二次扫表。
+理由：
+- **先规范后回填**：确保规范 5 条总是拿到 10-50 的顺序，非规范分类追加到 60 以上，不会与规范分类撞 display_order。
+- **先回填再安 trigger**：这样不需要 `ALTER TABLE prompts VALIDATE CONSTRAINT` 之类的二次扫表。
+- 老数据为空时步骤 3 的 `SELECT` 不产生行，照常执行。
+- 若老数据里存在规范分类的副本（如 prompts 里已有 `category='生图'` 行），`row_number()` 会给它分配到一个位次然后 `on conflict` 跳过，导致 display_order 出现空位（如 70, 80 而不是 60, 70）。纯视觉问题，排序稳定性不受影响。
 
 ## 3. API
 
@@ -113,11 +125,14 @@ Migration 顺序：
 | POST | `/api/categories/:id/move` | admin | 上/下移动一位 |
 | DELETE | `/api/categories/:id` | admin | 删除空分类 |
 
-**权限实现**：所有写端点入口：
+**权限实现**：所有写端点入口（与 `api/prompts.ts` / `api/examples.ts` 等现有端点保持一致）：
 ```ts
-const { user } = await authenticate(req);
+const user = await authenticate(req);
+if (!user) return res.status(401).json({ error: "Unauthorized" });
 if (!user.is_admin) return res.status(403).json({ error: "forbidden" });
 ```
+
+GET 不需要登录，跳过 authenticate 直接查。
 
 ### 3.2 GET /api/categories
 
@@ -157,6 +172,11 @@ declare
   next_order integer;
   row categories;
 begin
+  -- Advisory lock 序列化所有 create_category 调用。没有它，两个并发 admin
+  -- 可能各自读到同一个 max(display_order)，插入同样的 next_order，导致
+  -- 排序并列。key 是任意常量（categories 表的"排序管理"命名空间）。
+  perform pg_advisory_xact_lock(hashtext('categories.display_order'));
+
   select coalesce(max(display_order), 0) + 10 into next_order from categories;
   insert into categories (name, display_order)
     values (p_name, next_order)
@@ -182,7 +202,11 @@ as $$
 declare
   old_name text;
 begin
-  select name into old_name from categories where id = category_id;
+  -- FOR UPDATE 锁住这行。与 trigger 里的 FOR KEY SHARE 互斥：若此时
+  -- 有 prompt insert/update 正在持锁，这里会等；若此时 rename 持锁，
+  -- prompt 写入会等。关闭了 "trigger 看到分类存在 → 重命名把它改掉 →
+  -- prompt 引用悬空" 的窗口。
+  select name into old_name from categories where id = category_id for update;
   if old_name is null then
     raise exception 'not_found' using errcode = 'P0002';
   end if;
@@ -263,7 +287,10 @@ declare
   cat_name text;
   used_count integer;
 begin
-  select name into cat_name from categories where id = category_id;
+  -- FOR UPDATE 锁住这行。与 trigger 的 FOR KEY SHARE 互斥，关闭
+  -- "count=0 → 同时 prompt insert 带此分类 → trigger 通过 → 这里 delete"
+  -- 的 TOCTOU 窗口。
+  select name into cat_name from categories where id = category_id for update;
   if cat_name is null then
     raise exception 'not_found' using errcode = 'P0002';
   end if;
