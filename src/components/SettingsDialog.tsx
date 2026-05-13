@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { getApiKey, setApiKey, clearApiKey } from "../lib/apiKey";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { updateProfile, AuthError } from "../lib/authClient";
+import { CategoryManagerPanel } from "./CategoryManagerPanel";
 
 interface Props {
   open: boolean;
@@ -152,6 +153,10 @@ export function SettingsDialog({ open, onOpenChange, onProfileUpdated }: Props) 
               仅保存在当前浏览器标签内存中，关闭后清空。
             </p>
           </div>
+
+          {currentUser.status === "authenticated" && currentUser.user.is_admin && (
+            <CategoryManagerPanel />
+          )}
 
           <div className="flex justify-end gap-2 mt-6">
             <button
