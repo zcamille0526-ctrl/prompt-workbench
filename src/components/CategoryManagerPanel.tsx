@@ -92,6 +92,21 @@ function CategoryRow({
     }
   };
 
+  const handleDelete = async () => {
+    onError(null);
+    if (!window.confirm(`确认删除分类「${category.name}」？`)) return;
+    onBusy(category.id);
+    try {
+      await api.deleteCategory(category.id);
+      await onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "删除失败";
+      onError(translateError(msg));
+    } finally {
+      onBusy(null);
+    }
+  };
+
   const handleMove = async (direction: "up" | "down") => {
     onError(null);
     onBusy(category.id);
@@ -151,7 +166,15 @@ function CategoryRow({
       >
         ✏️
       </button>
-      {/* delete button comes in Task 18 */}
+      <button
+        type="button"
+        onClick={() => void handleDelete()}
+        disabled={busy || editing}
+        className="px-1.5 py-0.5 text-xs text-error/70 hover:text-error disabled:opacity-30"
+        title="删除"
+      >
+        🗑️
+      </button>
     </div>
   );
 }
