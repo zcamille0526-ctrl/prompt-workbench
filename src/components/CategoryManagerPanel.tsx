@@ -53,11 +53,25 @@ function CategoryRow({
   onError: (msg: string | null) => void;
   onChanged: () => Promise<void>;
 }) {
+  const handleMove = async (direction: "up" | "down") => {
+    onError(null);
+    onBusy(category.id);
+    try {
+      await api.moveCategory(category.id, direction);
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "移动失败");
+    } finally {
+      onBusy(null);
+    }
+  };
+
   return (
     <div className="flex items-center gap-1 text-sm">
       <button
         type="button"
         disabled={isFirst || busy}
+        onClick={() => void handleMove("up")}
         className="px-1.5 py-0.5 text-xs text-primary/70 hover:text-primary disabled:opacity-30"
         title="上移"
       >
@@ -66,6 +80,7 @@ function CategoryRow({
       <button
         type="button"
         disabled={isLast || busy}
+        onClick={() => void handleMove("down")}
         className="px-1.5 py-0.5 text-xs text-primary/70 hover:text-primary disabled:opacity-30"
         title="下移"
       >
