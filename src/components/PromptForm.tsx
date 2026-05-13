@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { CATEGORIES } from "../lib/constants";
+import { useCategories } from "../lib/categoriesContext";
 import { PromptCreateSchema, PromptUpdateSchema } from "../lib/schemas";
 import { PROMPT_TEMPLATE } from "../lib/templates";
 import type {
@@ -25,6 +25,7 @@ export function PromptForm({
   onUpdate,
   initial,
 }: Props) {
+  const { categories } = useCategories();
   const isEdit = initial !== undefined;
   const [title, setTitle] = useState(initial?.title || "");
   const [content, setContent] = useState(initial?.content || "");
@@ -126,16 +127,30 @@ export function PromptForm({
 
             <div>
               <label className="text-sm font-medium text-text-primary">分类</label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="input-field mt-1"
-              >
-                <option value="">请选择</option>
-                {CATEGORIES.map((cat) => (
-                  <option key={cat} value={cat}>{cat}</option>
-                ))}
-              </select>
+              {/* If the prompt's saved category no longer exists in the list, force the
+                  select's current value to "" so the "请选择" placeholder becomes the
+                  selected one — the orphan appears as a disabled hint, NOT selected. */}
+              {(() => {
+                const isOrphan = !!category && !categories.some((c) => c.name === category);
+                const selectValue = isOrphan ? "" : category;
+                return (
+                  <select
+                    value={selectValue}
+                    onChange={(e) => setCategory(e.target.value)}
+                    className="input-field mt-1"
+                  >
+                    <option value="">请选择</option>
+                    {isOrphan && (
+                      <option value={category} disabled>
+                        {category}（已失效，请重新选择）
+                      </option>
+                    )}
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                );
+              })()}
             </div>
 
             <div>
