@@ -54,6 +54,13 @@ export function PromptForm({
     e.preventDefault();
     setError(null);
 
+    // P1 fix: prevent submitting orphaned category (codex review)
+    const isOrphan = !!category && !categories.some((c) => c.name === category);
+    if (isOrphan) {
+      setError("分类已失效，请重新选择");
+      return;
+    }
+
     const tags = tagsInput
       .split(/[,，]/)
       .map((t) => t.trim())
