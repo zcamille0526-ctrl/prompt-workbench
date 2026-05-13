@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { CurrentUserProvider, useCurrentUser } from "./hooks/useCurrentUser";
+import { CategoriesProvider } from "./lib/categoriesContext";
 import { usePrompts } from "./hooks/usePrompts";
 import { usePromptsPolling } from "./hooks/usePromptsPolling";
 import { Layout } from "./components/Layout";
@@ -298,7 +299,9 @@ function AppRoutes() {
 export default function App() {
   return (
     <CurrentUserProvider>
-      <AppRoutes />
+      <CategoriesProvider>
+        <AppRoutes />
+      </CategoriesProvider>
     </CurrentUserProvider>
   );
 }

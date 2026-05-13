@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { CATEGORIES } from "../lib/constants";
+import { useCategories } from "../lib/categoriesContext";
 
 interface Props {
   selectedCategory: string | null;
@@ -26,6 +26,7 @@ export function Sidebar({
   selectedTag,
   onClearTag,
 }: Props) {
+  const { categories } = useCategories();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     return localStorage.getItem(COLLAPSED_KEY) === "1";
   });
@@ -124,17 +125,17 @@ export function Sidebar({
         >
           全部分类
         </button>
-        {CATEGORIES.map((cat) => (
+        {categories.map((c) => (
           <button
-            key={cat}
-            onClick={() => onSelectCategory(cat)}
+            key={c.id}
+            onClick={() => onSelectCategory(c.name)}
             className={`w-full text-left px-3 py-1.5 text-sm rounded-sm mb-1 ${
-              selectedCategory === cat
+              selectedCategory === c.name
                 ? "bg-white/15 text-white"
                 : "text-white/70 hover:bg-white/10"
             }`}
           >
-            {cat}
+            {c.name}
           </button>
         ))}
       </nav>
