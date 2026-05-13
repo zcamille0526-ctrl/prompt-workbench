@@ -8,10 +8,10 @@
 
 - 邮箱账号 + 密码登录，每个用户独立身份（Phase 2 用户体系）
 - 提示词增删改查，支持 Markdown 与变量模板
-- 按大类筛选（生图 / 生文 / 分析 / 开发 / 元提示词）+ 标签过滤 + 关键词搜索
+- 按分类筛选 + 标签过滤 + 关键词搜索（分类由管理员在「设置 → 分类管理」中维护）
 - 草稿机制：保存为草稿仅自己可见，发布后全员可见
 - 内置 DeepSeek 试运行：在线测试提示词效果，可保存示例对话
-- 管理员（`is_admin`）可清理任意用户的已发布提示词与示例
+- 管理员（`is_admin`）可清理任意用户的已发布提示词与示例，并管理分类（新建 / 重命名 / 上下移动 / 删除）
 - 导出全部提示词为 JSON
 - 团队级共享密码作为**注册门**：拿到密码才能注册，登录不需要
 
@@ -71,7 +71,7 @@ cp .env.example .env.local
 
 #### 3.3 跑 migrations
 
-按顺序在 `Supabase SQL Editor` 执行 `supabase/migrations/` 下的 6 个文件：
+按顺序在 `Supabase SQL Editor` 执行 `supabase/migrations/` 下的 8 个文件：
 
 ```
 001_create_prompts.sql        prompts 表 + RLS
@@ -80,9 +80,11 @@ cp .env.example .env.local
 004_add_is_draft.sql          草稿支持
 005_create_examples.sql       examples 表
 006_user_system.sql           profiles 表 + invite_throttle RPC + Phase 2 列重命名
+007_category_management.sql   categories 表 + 软 FK trigger + 5 个预填分类
+008_category_rpc.sql          create/rename/move/delete RPC（含行锁与 REVOKE EXECUTE）
 ```
 
-**顺序不能错**——006 依赖前面 5 个里的 prompts/examples 表结构。
+**顺序不能错**——006 依赖前面 5 个里的 prompts/examples 表结构，007/008 依赖 prompts 表存在。
 
 ### 4. 启动开发服务器
 
@@ -130,10 +132,12 @@ Fork 本仓库，在 Vercel 控制台导入。Vercel 会自动识别 React + Vit
 5. 试运行（需要 DeepSeek API Key，在 Settings 填）
 6. 保存示例对话
 
-### 4. Migration 顺序（**部署窗口期）
+### 4. Migration 顺序（**部署窗口期**）
 
-新建 Supabase 项目时按 `001 → 006` 跑 migrations。
+新建 Supabase 项目时按 `001 → 008` 跑 migrations。
 **升级 Phase 1 → Phase 2 时**：先合并代码到 `main`、Vercel 部署完成、然后立刻在 Supabase 跑 `006_user_system.sql`（这一步会 `truncate prompts/examples` —— Phase 2 决策 c：旧数据不保留，所有人在新身份系统重建提示词）。期间业务接口不可用约 1-2 分钟。
+
+**增量升级到 Category Management（007/008）**：可在生产代码部署后直接跑，无业务中断。回滚需先 revert 前端再 drop 数据库对象，见 `docs/specs/2026-05-12-category-management-design.md` §6.2。
 
 ## 批量导入提示词
 
@@ -147,6 +151,7 @@ SUPABASE_SERVICE_ROLE_KEY="your-key" python3 scripts/import-prompts.py
 
 ## 文档
 
-- `docs/specs/` — 设计规格，包括完整的 Phase 2 用户体系 spec（codex 6 轮审核）
+- `docs/specs/` — 设计规格，包括完整的 Phase 2 用户体系 spec（codex 6 轮审核）与 Category Management spec（3 轮审核）
+- `docs/plans/` — 实施计划（含每步代码与验证命令）
 - `supabase/migrations/` — 数据库 schema 演进
 - `.env.example` — 完整环境变量清单
