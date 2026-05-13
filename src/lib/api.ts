@@ -1,5 +1,6 @@
 import { API_BASE_URL } from "./constants";
 import { getAccessToken, refresh, AuthError } from "./authClient";
+import type { Category } from "./schemas";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -317,6 +318,54 @@ class ApiClient {
   async deleteExample(id: string): Promise<void> {
     const qs = new URLSearchParams({ id });
     await this.request(`/api/examples?${qs.toString()}`, { method: "DELETE" });
+  }
+
+  // -------- Categories --------
+
+  async listCategories(): Promise<Category[]> {
+    const res = await fetch(`${API_BASE_URL}/api/categories`);
+    if (!res.ok) throw new Error("Failed to load categories");
+    const body = await res.json();
+    return body.categories ?? [];
+  }
+
+  async createCategory(name: string): Promise<Category> {
+    return this.request<Category>("/api/categories", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async renameCategory(id: string, name: string): Promise<Category> {
+    const qs = new URLSearchParams({ id });
+    return this.request<Category>(`/api/categories?${qs.toString()}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async moveCategory(id: string, direction: "up" | "down"): Promise<void> {
+    const qs = new URLSearchParams({ id, action: "move" });
+    await this.request(`/api/categories?${qs.toString()}`, {
+      method: "POST",
+      body: JSON.stringify({ direction }),
+    });
+  }
+
+  async deleteCategory(id: string): Promise<void> {
+    const qs = new URLSearchParams({ id });
+    const res = await authedFetch(`/api/categories?${qs.toString()}`, {
+      method: "DELETE",
+    });
+    // 204 No Content is success; anything else with a body is an error.
+    if (res.status === 204) return;
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const msg = err.error === "in_use"
+        ? `in_use:${err.used_by_count ?? 0}`
+        : err.error ?? "Delete failed";
+      throw new Error(msg);
+    }
   }
 }
 
