@@ -12,6 +12,32 @@ export function CategoryManagerPanel() {
   const { categories, refresh, error: listError } = useCategories();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  // Shared with CategoryRow — hoist to module scope or duplicate here.
+  // Create + rename both surface 'duplicate_name' from the server.
+  const translateCreateError = (msg: string): string => {
+    if (msg === "duplicate_name") return "该分类名已存在";
+    return msg;
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newName.trim();
+    if (!name) return;
+    setOpError(null);
+    setCreating(true);
+    try {
+      await api.createCategory(name);
+      setNewName("");
+      await refresh();
+    } catch (e) {
+      setOpError(translateCreateError(e instanceof Error ? e.message : "创建失败"));
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
     <div className="border-t border-primary/10 pt-4 mt-4">
@@ -32,6 +58,23 @@ export function CategoryManagerPanel() {
           />
         ))}
       </div>
+      <form onSubmit={handleCreate} className="flex gap-2 mt-3">
+        <input
+          type="text"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="新分类名"
+          maxLength={32}
+          className="flex-1 text-sm px-2 py-1 border border-primary/20 rounded"
+        />
+        <button
+          type="submit"
+          disabled={!newName.trim() || creating}
+          className="btn-pill bg-accent text-primary text-xs px-3 py-1 disabled:opacity-50"
+        >
+          {creating ? "创建中..." : "+ 新建"}
+        </button>
+      </form>
     </div>
   );
 }
