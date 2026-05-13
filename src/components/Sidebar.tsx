@@ -26,7 +26,7 @@ export function Sidebar({
   selectedTag,
   onClearTag,
 }: Props) {
-  const { categories } = useCategories();
+  const { categories, loading, error } = useCategories();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     return localStorage.getItem(COLLAPSED_KEY) === "1";
   });
@@ -125,7 +125,15 @@ export function Sidebar({
         >
           全部分类
         </button>
-        {categories.map((c) => (
+        {loading && (
+          <div className="px-3 py-1.5 text-sm text-white/50">加载中...</div>
+        )}
+        {error && (
+          <div className="px-3 py-1.5 text-xs text-red-400">
+            加载失败：{error}
+          </div>
+        )}
+        {!loading && !error && categories.map((c) => (
           <button
             key={c.id}
             onClick={() => onSelectCategory(c.name)}

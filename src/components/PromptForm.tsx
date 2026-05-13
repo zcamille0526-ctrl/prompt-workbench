@@ -25,7 +25,7 @@ export function PromptForm({
   onUpdate,
   initial,
 }: Props) {
-  const { categories } = useCategories();
+  const { categories, loading: categoriesLoading, error: categoriesError } = useCategories();
   const isEdit = initial !== undefined;
   const [title, setTitle] = useState(initial?.title || "");
   const [content, setContent] = useState(initial?.content || "");
@@ -134,6 +134,11 @@ export function PromptForm({
 
             <div>
               <label className="text-sm font-medium text-text-primary">分类</label>
+              {categoriesError && (
+                <div className="text-xs text-red-500 mt-1">
+                  ⚠️ 分类加载失败：{categoriesError}
+                </div>
+              )}
               {/* If the prompt's saved category no longer exists in the list, force the
                   select's current value to "" so the "请选择" placeholder becomes the
                   selected one — the orphan appears as a disabled hint, NOT selected. */}
@@ -144,9 +149,12 @@ export function PromptForm({
                   <select
                     value={selectValue}
                     onChange={(e) => setCategory(e.target.value)}
+                    disabled={categoriesLoading}
                     className="input-field mt-1"
                   >
-                    <option value="">请选择</option>
+                    <option value="">
+                      {categoriesLoading ? "加载中..." : "请选择"}
+                    </option>
                     {isOrphan && (
                       <option value={category} disabled>
                         {category}（已失效，请重新选择）
