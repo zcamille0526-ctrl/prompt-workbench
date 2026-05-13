@@ -41,10 +41,25 @@ vi.mock("@supabase/supabase-js", () => ({
 }));
 
 const login = (await import("../../api/auth/login")).default;
-const refresh = (await import("../../api/auth/refresh")).default;
-const logout = (await import("../../api/auth/logout")).default;
-const me = (await import("../../api/auth/me")).default;
+const session = (await import("../../api/auth/session")).default;
 const supaLib = await import("../../api/lib/supabase");
+
+// Wrappers preserve the per-action calling pattern (refresh/logout/me) used
+// throughout the suite even though the three endpoints share one handler in
+// production. The wrappers inject `?action=X` into the request, matching the
+// vercel.json rewrites used in production.
+const refresh = (req: VercelRequest, res: VercelResponse) => {
+  (req as any).query = { ...(req.query ?? {}), action: "refresh" };
+  return session(req, res);
+};
+const logout = (req: VercelRequest, res: VercelResponse) => {
+  (req as any).query = { ...(req.query ?? {}), action: "logout" };
+  return session(req, res);
+};
+const me = (req: VercelRequest, res: VercelResponse) => {
+  (req as any).query = { ...(req.query ?? {}), action: "me" };
+  return session(req, res);
+};
 
 function makeRes() {
   const res: any = { statusCode: 0, body: undefined };

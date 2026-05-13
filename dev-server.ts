@@ -9,9 +9,7 @@ import categoriesHandler from "./api/categories.js";
 import signupHandler from "./api/auth/signup.js";
 import setupAccountHandler from "./api/auth/setup-account.js";
 import loginHandler from "./api/auth/login.js";
-import refreshHandler from "./api/auth/refresh.js";
-import logoutHandler from "./api/auth/logout.js";
-import meHandler from "./api/auth/me.js";
+import sessionHandler from "./api/auth/session.js";
 import resendInviteHandler from "./api/auth/resend-invite.js";
 import profileUpdateHandler from "./api/profile/update.js";
 
@@ -48,9 +46,21 @@ app.all("/api/categories", adapt(categoriesHandler));
 app.post("/api/auth/signup", adapt(signupHandler));
 app.post("/api/auth/setup-account", adapt(setupAccountHandler));
 app.post("/api/auth/login", adapt(loginHandler));
-app.post("/api/auth/refresh", adapt(refreshHandler));
-app.post("/api/auth/logout", adapt(logoutHandler));
-app.get("/api/auth/me", adapt(meHandler));
+// me/logout/refresh share one handler in production (Vercel Hobby plan
+// caps deployments at 12 functions). Production rewrites in vercel.json
+// pass `?action=me|logout|refresh`. Mirror that locally.
+const sessionAdapter =
+  (action: "me" | "logout" | "refresh") =>
+  (req: ExpressRequest, res: ExpressResponse) => {
+    (req as ExpressRequest & { query: Record<string, string> }).query = {
+      ...(req.query as Record<string, string>),
+      action,
+    };
+    return adapt(sessionHandler)(req, res);
+  };
+app.post("/api/auth/refresh", sessionAdapter("refresh"));
+app.post("/api/auth/logout", sessionAdapter("logout"));
+app.get("/api/auth/me", sessionAdapter("me"));
 app.post("/api/auth/resend-invite", adapt(resendInviteHandler));
 app.patch("/api/profile/update", adapt(profileUpdateHandler));
 
