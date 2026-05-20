@@ -42,7 +42,7 @@ export function getSupabaseClient(): SupabaseClient {
   if (cached) return cached;
   cached = createClient(URL, ANON_KEY, {
     auth: {
-      storage: window.sessionStorage,
+      storage: window.localStorage,
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: false,

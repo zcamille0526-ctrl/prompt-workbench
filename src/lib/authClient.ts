@@ -113,21 +113,21 @@ const ACCESS_KEY = "pw.access_token";
 const REFRESH_KEY = "pw.refresh_token";
 
 function storeTokens(t: { access_token: string; refresh_token: string }) {
-  window.sessionStorage.setItem(ACCESS_KEY, t.access_token);
-  window.sessionStorage.setItem(REFRESH_KEY, t.refresh_token);
+  window.localStorage.setItem(ACCESS_KEY, t.access_token);
+  window.localStorage.setItem(REFRESH_KEY, t.refresh_token);
 }
 
 function readAccess(): string | null {
-  return window.sessionStorage.getItem(ACCESS_KEY);
+  return window.localStorage.getItem(ACCESS_KEY);
 }
 
 function readRefresh(): string | null {
-  return window.sessionStorage.getItem(REFRESH_KEY);
+  return window.localStorage.getItem(REFRESH_KEY);
 }
 
 function clearTokens() {
-  window.sessionStorage.removeItem(ACCESS_KEY);
-  window.sessionStorage.removeItem(REFRESH_KEY);
+  window.localStorage.removeItem(ACCESS_KEY);
+  window.localStorage.removeItem(REFRESH_KEY);
 }
 
 /**
