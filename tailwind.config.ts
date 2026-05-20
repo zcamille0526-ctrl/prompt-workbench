@@ -1,27 +1,28 @@
 import type { Config } from "tailwindcss";
 import typography from "@tailwindcss/typography";
 
-// Palette: Happy Hues 13 — warm cream + pink + mint.
-// primary   = headline + stroke + button text
-// text-primary = paragraph (body) color, warmer than primary
-// accent    = pink highlight / primary button bg
-// tertiary  = mint, used for draft badge and low-temperature callouts
+// Palette: Modern Red-White-Grey-Black
+// primary   = near-black for headlines / strokes / button text
+// accent    = vivid red for primary actions
+// background = off-white page
+// surface   = pure white cards
+// secondary = light grey chips
 const config: Config = {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        primary: "#33272a",        // headline / stroke / button text (was #111827)
-        secondary: "#ffc6c7",      // soft pink chips + selected bg (was #FFEDD5)
-        background: "#faeee7",     // page cream (was #E5E7EB)
-        surface: "#fffffe",        // cards / panels (was #FFFFFF)
-        accent: "#ff8ba7",         // pink highlight / primary button (was #111827)
-        "accent-hover": "#e66a87", // deeper pink for btn hover
-        error: "#c83b3b",          // softened red (was #DC2626)
-        "text-primary": "#594a4e", // paragraph (was #374151)
-        "text-secondary": "#fffffe", // text on dark sidebar (kept light)
-        tertiary: "#c3f0ca",       // mint for draft badge (new)
-        "tertiary-dark": "#1a5a3f",// deep green on mint bg (new)
+        primary: "#1a1a1a",           // near-black headline / stroke
+        secondary: "#e5e5e5",         // light grey chips + selected bg
+        background: "#f5f5f5",        // off-white page
+        surface: "#ffffff",           // cards / panels
+        accent: "#e02020",            // vivid red primary action
+        "accent-hover": "#b91c1c",    // deeper red hover
+        error: "#b91c1c",             // error red
+        "text-primary": "#2d2d2d",    // body text
+        "text-secondary": "#f5f5f5",  // text on dark sidebar
+        tertiary: "#fecaca",          // soft red for draft badge
+        "tertiary-dark": "#7f1d1d",   // deep red on soft red bg
       },
       fontFamily: {
         sans: [

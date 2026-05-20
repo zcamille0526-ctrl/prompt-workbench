@@ -19,16 +19,16 @@
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
-    background: rgba(51, 39, 42, 0.18);
+    background: rgba(26, 26, 26, 0.18);
     border-radius: 9999px;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: rgba(51, 39, 42, 0.32);
+    background: rgba(26, 26, 26, 0.32);
   }
   /* Firefox */
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgba(51, 39, 42, 0.22) transparent;
+    scrollbar-color: rgba(26, 26, 26, 0.22) transparent;
   }
 }
 
@@ -115,7 +115,7 @@
     transition: opacity 0.3s ease;
     background: radial-gradient(
       250px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
-      rgba(255, 198, 199, 0.5),
+      rgba(224, 32, 32, 0.08),
       transparent 80%
     );
     pointer-events: none;
