@@ -81,7 +81,7 @@ def parse_prompts(filepath: str) -> list[dict]:
             "category": category,
             "tags": tags,
             "variables": [],
-            "created_by": "camille",
+            "created_by_id": "1e02d6ef-7ded-4fea-9738-b8021a1f1460",
         })
 
     return prompts

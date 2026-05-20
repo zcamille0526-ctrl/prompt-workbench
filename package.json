@@ -11,7 +11,8 @@
     "lint:env": "node scripts/lint-env.mjs",
     "typecheck": "tsc -b tsconfig.app.json tsconfig.node.json api/tsconfig.json tests/tsconfig.json",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "start": "node --import tsx/esm server.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",

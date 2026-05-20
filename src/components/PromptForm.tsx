@@ -244,6 +244,7 @@ export function PromptForm({
                   </button>
                 </div>
               ))}
+              <p className="text-xs text-text-secondary mt-1">在内容中用 <code className="bg-surface-secondary px-1 rounded">{"{{变量名}}"}</code> 引用变量，变量名需与此处保持一致</p>
             </div>
 
             <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
