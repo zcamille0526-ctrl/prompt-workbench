@@ -1,8 +1,26 @@
 import express from "express";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { readFileSync } from "fs";
 import type { Request as ExpressRequest, Response as ExpressResponse } from "express";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+
+// Load .env file manually so the server works regardless of how PM2 starts it
+try {
+  const envPath = join(dirname(fileURLToPath(import.meta.url)), ".env");
+  const lines = readFileSync(envPath, "utf-8").split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim();
+    if (key && !(key in process.env)) process.env[key] = val;
+  }
+} catch {
+  // .env not found, rely on environment variables already set
+}
 import promptsHandler from "./api/prompts.js";
 import useCountHandler from "./api/use-count.js";
 import chatHandler from "./api/chat.js";
