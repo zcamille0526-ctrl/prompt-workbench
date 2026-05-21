@@ -41,7 +41,7 @@ export function AuthScreen({ onLoggedIn }: Props) {
           提示词工作台
         </h1>
 
-        <div className="flex border-b border-gray-200 mb-6">
+        <div className="flex border-b border-border mb-6">
           <TabButton active={tab === "login"} onClick={() => setTab("login")}>
             登录
           </TabButton>
@@ -76,8 +76,8 @@ function TabButton({
       className={
         "flex-1 py-2 text-sm font-medium transition-colors " +
         (active
-          ? "text-primary border-b-2 border-primary -mb-px"
-          : "text-text-primary hover:text-primary")
+          ? "text-primary border-b-2 border-accent -mb-px"
+          : "text-text-primary/60 hover:text-primary")
       }
     >
       {children}
@@ -284,7 +284,7 @@ function ResendInvite({
   }
 
   return (
-    <form onSubmit={submit} className="space-y-2 pt-2 border-t border-gray-200">
+    <form onSubmit={submit} className="space-y-2 pt-2 border-t border-border">
       <p className="text-xs text-text-primary">重新发送邀请邮件</p>
       {!teamPasswordHint && (
         <input

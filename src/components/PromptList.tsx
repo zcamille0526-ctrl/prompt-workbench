@@ -56,18 +56,25 @@ export function PromptList({ prompts, selectedId, onSelect, onTagClick: _onTagCl
                 {prompt.title}
               </span>
               {prompt.is_draft && (
-                <span className="text-[10px] font-medium bg-tertiary text-tertiary-dark rounded-full px-1.5 py-0.5 whitespace-nowrap shrink-0">
-                  📝 草稿
+                <span className="text-[10px] font-medium bg-tertiary text-tertiary-dark rounded-full px-1.5 py-0.5 whitespace-nowrap shrink-0 inline-flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-tertiary-dark/70" aria-hidden="true" />
+                  草稿
                 </span>
               )}
               {prompt.use_count > 0 && (
-                <span className="text-[11px] text-text-primary/60 shrink-0 flex items-center gap-0.5 tabular-nums">
-                  ↻{prompt.use_count}
+                <span
+                  className="text-[11px] text-text-primary/70 shrink-0 flex items-center gap-0.5 tabular-nums"
+                  title={`已使用 ${prompt.use_count} 次`}
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {prompt.use_count}
                 </span>
               )}
             </div>
             {/* Row 2: category chip inline with content preview */}
-            <div className="flex items-center gap-1.5 mt-1 text-xs text-text-primary/75 min-w-0">
+            <div className="flex items-center gap-1.5 mt-1 text-xs text-text-primary/85 min-w-0">
               <span className="category-chip-soft shrink-0 !py-0 !px-1.5 !text-[10px]">
                 {prompt.category}
               </span>

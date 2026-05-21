@@ -50,10 +50,20 @@ export function ExamplesList({ examples, isLoading, error, promptOwnerId, onDele
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full text-left flex items-center justify-between bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 text-sm font-medium text-primary transition-colors"
+        className="w-full text-left flex items-center justify-between bg-gray-50 hover:bg-gray-100 border border-border rounded-lg px-3 py-2 text-sm font-medium text-primary transition-colors"
       >
-        <span>📝 示例输出（{examples.length}）</span>
-        <span className="text-xs text-text-primary/60">{open ? "▴" : "▾"}</span>
+        <span className="flex items-center gap-1.5">
+          <svg className="w-4 h-4 text-text-primary/70" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+          </svg>
+          示例输出（{examples.length}）
+        </span>
+        <svg
+          className={`w-4 h-4 text-text-primary/60 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
       </button>
 
       {open && (
@@ -95,7 +105,7 @@ function ExampleCard({
   );
 
   return (
-    <div className="bg-surface border border-gray-200 rounded-lg p-3">
+    <div className="bg-surface border border-border rounded-lg p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-primary">
@@ -125,13 +135,19 @@ function ExampleCard({
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="text-xs text-primary/70 hover:text-primary mt-2"
+        className="text-xs text-primary/80 hover:text-primary mt-2 inline-flex items-center gap-1"
       >
-        {expanded ? "收起对话 ▴" : `展开对话（${example.messages.length} 条）▾`}
+        {expanded ? "收起对话" : `展开对话（${example.messages.length} 条）`}
+        <svg
+          className={`w-3 h-3 transition-transform ${expanded ? "rotate-180" : ""}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
       </button>
 
       {expanded && (
-        <div className="mt-2 bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2 max-h-80 overflow-y-auto">
+        <div className="mt-2 bg-gray-50 border border-border rounded-lg p-3 space-y-2 max-h-80 overflow-y-auto">
           {example.messages.map((m, idx) => (
             <div
               key={idx}
@@ -141,7 +157,7 @@ function ExampleCard({
                 className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
                   m.role === "user"
                     ? "bg-primary text-white"
-                    : "bg-surface border border-gray-200 text-primary"
+                    : "bg-surface border border-border text-primary"
                 }`}
               >
                 {m.role === "assistant" ? (

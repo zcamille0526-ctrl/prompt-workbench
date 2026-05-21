@@ -45,15 +45,16 @@
            active:scale-[0.98];
   }
 
-  /* Primary action: pink pill lifted off the cream page with a double shadow.
-     Inner shadow gives it edge definition (replacing the old harsh stroke),
-     outer pink-tinted shadow makes it feel "raised" and coherent with the
-     palette. Hover deepens both layers. */
+  /* Primary action: red pill lifted off the page with a double shadow.
+     Inner near-black shadow gives edge definition; outer red-tinted shadow
+     makes it feel "raised" and coherent with the red accent (was a leftover
+     pink tint from an older theme). White text on #e02020 clears WCAG AA.
+     Hover deepens both layers. */
   .btn-primary {
-    @apply btn-pill bg-accent text-primary
-           shadow-[0_1px_2px_rgba(51,39,42,0.12),0_3px_10px_rgba(255,139,167,0.35)]
+    @apply btn-pill bg-accent text-white font-medium
+           shadow-[0_1px_2px_rgba(26,26,26,0.18),0_3px_10px_rgba(224,32,32,0.28)]
            hover:bg-accent-hover
-           hover:shadow-[0_2px_4px_rgba(51,39,42,0.16),0_6px_14px_rgba(255,139,167,0.45)]
+           hover:shadow-[0_2px_4px_rgba(26,26,26,0.22),0_6px_14px_rgba(224,32,32,0.38)]
            focus-visible:ring-accent/40;
   }
 
@@ -72,15 +73,18 @@
            transition-all duration-150 placeholder:text-primary/35;
   }
 
+  /* Category chip: neutral grey, not red. Red is reserved for true primary
+     actions (copy / new prompt) so it keeps its "this is the main action"
+     signal instead of being scattered across passive metadata. */
   .category-chip {
-    @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-accent text-primary;
+    @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-secondary text-primary;
   }
 
-  /* Soft muted chip — used inline in the list where the bright pink would
-     fight with card chrome. Warm neutral on cream. */
+  /* Soft muted chip — used inline in the list where a filled chip would
+     fight with card chrome. Neutral on the off-white card. */
   .category-chip-soft {
     @apply inline-block text-xs font-medium px-2 py-0.5 rounded-full
-           bg-primary/10 text-primary/80;
+           bg-primary/10 text-primary/85;
   }
 
   .tag-chip {
@@ -103,9 +107,8 @@
     @apply tag-chip cursor-pointer transition-colors duration-150 hover:bg-accent/60;
   }
 
-  /* Radial cursor glow under each list row. Uses secondary (soft pink) RGB
-     at 50% opacity so the highlight feels coherent with the palette instead
-     of drifting to peach like before. */
+  /* Radial cursor glow under each list row. A faint red tint at low opacity
+     so the highlight stays coherent with the accent without shouting. */
   .prompt-item::before {
     content: "";
     position: absolute;

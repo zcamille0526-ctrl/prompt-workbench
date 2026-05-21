@@ -23,6 +23,7 @@ const config: Config = {
         "text-secondary": "#f5f5f5",  // text on dark sidebar
         tertiary: "#fecaca",          // soft red for draft badge
         "tertiary-dark": "#7f1d1d",   // deep red on soft red bg
+        border: "#e2e2e2",            // single divider/hairline color
       },
       fontFamily: {
         sans: [

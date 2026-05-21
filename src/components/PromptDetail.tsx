@@ -109,8 +109,9 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
               {prompt.title}
             </h2>
             {prompt.is_draft && (
-              <span className="text-xs font-medium bg-tertiary text-tertiary-dark rounded-full px-2 py-0.5 whitespace-nowrap">
-                📝 草稿
+              <span className="text-xs font-medium bg-tertiary text-tertiary-dark rounded-full px-2 py-0.5 whitespace-nowrap inline-flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-tertiary-dark/70" aria-hidden="true" />
+                草稿
               </span>
             )}
           </div>
@@ -119,7 +120,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
             <span className="category-chip">{prompt.category}</span>
             {prompt.tags.length > 0 && (
               <>
-                <span className="text-gray-300 text-xs">·</span>
+                <span className="text-primary/30 text-xs">·</span>
                 {prompt.tags.map((tag) => (
                   <button
                     key={tag}
@@ -148,8 +149,8 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
             <button
               onClick={handleTogglePublish}
               disabled={isToggling}
-              className="text-xs text-text-primary/70 hover:text-primary underline-offset-2 hover:underline disabled:opacity-50 px-2"
-              title="只有自己能再次看到"
+              className="btn-pill bg-transparent text-text-primary/80 border border-primary/20 hover:bg-secondary/50 hover:text-primary focus-visible:ring-primary/20 disabled:opacity-50"
+              title="转为草稿后只有自己能看到"
             >
               {isToggling ? "处理中..." : "转为草稿"}
             </button>
@@ -197,7 +198,7 @@ export function PromptDetail({ prompt, onEdit, onDelete, onTogglePublish, onSave
         </div>
       )}
 
-      <div className="prose prose-sm prose-gray max-w-none mb-4 prose-headings:text-primary prose-headings:border-b prose-headings:border-gray-200 prose-headings:pb-1 prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-p:text-text-primary prose-li:text-text-primary prose-strong:text-primary prose-code:bg-gray-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded-sm prose-code:text-sm prose-code:before:content-none prose-code:after:content-none prose-pre:bg-primary prose-pre:text-gray-100 prose-pre:rounded-lg prose-table:text-sm prose-th:bg-gray-50 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5">
+      <div className="prose prose-sm prose-gray max-w-none mb-4 prose-headings:text-primary prose-headings:border-b prose-headings:border-border prose-headings:pb-1 prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-p:text-text-primary prose-li:text-text-primary prose-strong:text-primary prose-code:bg-gray-100 prose-code:px-1 prose-code:py-0.5 prose-code:rounded-sm prose-code:text-sm prose-code:before:content-none prose-code:after:content-none prose-pre:bg-primary prose-pre:text-gray-100 prose-pre:rounded-lg prose-table:text-sm prose-th:bg-gray-50 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5">
         <ReactMarkdown>{finalContent}</ReactMarkdown>
       </div>
 

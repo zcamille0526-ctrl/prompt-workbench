@@ -70,7 +70,7 @@ export function SaveExampleDialog({
           </div>
 
           {(filledVars.length > 0 || modelLabel) && (
-            <div className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm">
+            <div className="mt-4 bg-gray-50 border border-border rounded-lg p-3 text-sm">
               <div className="text-xs font-medium text-primary/70 mb-1">本次运行参数</div>
               <div className="text-text-primary">
                 <span className="font-medium">模型：</span>
@@ -89,7 +89,7 @@ export function SaveExampleDialog({
             <div className="text-xs font-medium text-primary/70 mb-2">
               对话内容（{messages.length} 条）
             </div>
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 max-h-64 overflow-y-auto space-y-2">
+            <div className="bg-gray-50 border border-border rounded-lg p-3 max-h-64 overflow-y-auto space-y-2">
               {messages.map((m) => (
                 <div
                   key={m.id}
@@ -99,7 +99,7 @@ export function SaveExampleDialog({
                     className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
                       m.role === "user"
                         ? "bg-primary text-white"
-                        : "bg-surface border border-gray-200 text-primary"
+                        : "bg-surface border border-border text-primary"
                     }`}
                   >
                     {m.role === "assistant" ? (

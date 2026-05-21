@@ -163,10 +163,16 @@ export function TestRunPanel({
       <button
         type="button"
         onClick={handleOpenToggle}
-        className="btn-pill bg-secondary text-primary border border-secondary hover:bg-accent/60 focus-visible:ring-accent/40 font-medium"
+        className="btn-pill bg-secondary text-primary border border-secondary hover:bg-secondary/70 focus-visible:ring-primary/20 font-medium inline-flex items-center gap-1.5"
         title="用当前提示词与 DeepSeek 多轮对话"
       >
-        {open ? "收起试运行 ▴" : "试运行 ▾"}
+        {open ? "收起试运行" : "试运行"}
+        <svg
+          className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
       </button>
 
       {open && (
@@ -177,7 +183,7 @@ export function TestRunPanel({
             <select
               value={model}
               onChange={(e) => setModel(e.target.value as ModelId)}
-              className="text-sm font-medium bg-surface border border-gray-300 rounded-sm px-2 py-1 text-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="text-sm font-medium bg-surface border border-border rounded-sm px-2 py-1 text-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             >
               {MODELS.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -203,17 +209,20 @@ export function TestRunPanel({
                 type="button"
                 onClick={() => setSaveExampleOpen(true)}
                 disabled={!hasCompleteExchange}
-                className="text-xs font-medium bg-secondary text-primary border border-secondary rounded-full px-3 py-1 hover:bg-accent/60 disabled:opacity-50"
+                className="text-xs font-medium bg-secondary text-primary border border-secondary rounded-full px-3 py-1 hover:bg-secondary/70 disabled:opacity-50 inline-flex items-center gap-1"
                 title={hasCompleteExchange ? "把这次对话存为示例，供同事参考" : "至少需要一轮 user→assistant 完整对话"}
               >
-                💾 保存为示例
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5 5a2 2 0 012-2h8l4 4v10a2 2 0 01-2 2H7a2 2 0 01-2-2V5z M9 3v4h6 M8 17h8" />
+                </svg>
+                保存为示例
               </button>
             )}
             {messages.length > 0 && (
               <button
                 type="button"
                 onClick={clearHistory}
-                className="text-xs font-medium bg-surface text-primary border border-gray-300 rounded-full px-3 py-1 hover:bg-gray-50"
+                className="text-xs font-medium bg-surface text-primary border border-border rounded-full px-3 py-1 hover:bg-gray-50"
               >
                 清空对话
               </button>
@@ -231,7 +240,7 @@ export function TestRunPanel({
             <button
               type="button"
               onClick={openEditor}
-              className={`${pillBase} bg-surface text-primary border border-gray-300 hover:bg-gray-50`}
+              className={`${pillBase} bg-surface text-primary border border-border hover:bg-gray-50`}
             >
               {tempContent != null ? "继续临时编辑" : "临时编辑提示词"}
             </button>
@@ -262,7 +271,7 @@ export function TestRunPanel({
           </div>
 
           {editorOpen && (
-            <div className="mb-3 bg-surface border border-gray-300 rounded-lg p-3">
+            <div className="mb-3 bg-surface border border-border rounded-lg p-3">
               <p className="text-xs text-primary/70 mb-2 font-medium">
                 修改提示词内容（变量 {"{{name}}"} 仍可用，会替换为变量填写区的值）
               </p>
@@ -276,7 +285,7 @@ export function TestRunPanel({
                 <button
                   type="button"
                   onClick={() => setEditorOpen(false)}
-                  className={`${pillBase} bg-surface text-primary border border-gray-300 hover:bg-gray-50`}
+                  className={`${pillBase} bg-surface text-primary border border-border hover:bg-gray-50`}
                 >
                   取消
                 </button>
@@ -294,7 +303,7 @@ export function TestRunPanel({
           {/* Conversation */}
           <div
             ref={scrollRef}
-            className="bg-surface border border-gray-300 rounded-lg p-3 max-h-96 min-h-[200px] overflow-y-auto space-y-3 mb-3"
+            className="bg-surface border border-border rounded-lg p-3 max-h-96 min-h-[200px] overflow-y-auto space-y-3 mb-3"
           >
             {messages.length === 0 && (
               <p className="text-sm text-primary/50 text-center py-8">
@@ -317,7 +326,7 @@ export function TestRunPanel({
                   >
                     {isAssistant ? (
                       <>
-                        <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-primary">
+                        <div className="bg-gray-50 border border-border rounded-lg px-3 py-2 text-sm text-primary">
                           {showThinking ? (
                             <span className="text-primary/60">思考中...</span>
                           ) : (
