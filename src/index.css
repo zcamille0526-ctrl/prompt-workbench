@@ -73,18 +73,18 @@
            transition-all duration-150 placeholder:text-primary/35;
   }
 
-  /* Category chip: warm parchment tone — readable metadata, not an action. */
+  /* Category chip: warm amber — deeper background for contrast. */
   .category-chip {
     @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full;
-    background: #f5f0eb;
-    color: #5c4a32;
+    background: #e8d5b7;
+    color: #3d2b0f;
   }
 
-  /* Soft muted chip — same warm tone, slightly compact for inline list rows. */
+  /* Soft muted chip — same tone, slightly compact for inline list rows. */
   .category-chip-soft {
     @apply inline-block text-xs font-medium px-2 py-0.5 rounded-full;
-    background: #f5f0eb;
-    color: #7a6145;
+    background: #e8d5b7;
+    color: #3d2b0f;
   }
 
   .tag-chip {
