@@ -73,17 +73,18 @@
            transition-all duration-150 placeholder:text-primary/35;
   }
 
-  /* Category chip: consistent neutral style across detail and list views.
-     Grey background with near-black text — metadata, not an action. */
+  /* Category chip: warm parchment tone — readable metadata, not an action. */
   .category-chip {
-    @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-secondary text-primary;
+    @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full;
+    background: #f5f0eb;
+    color: #5c4a32;
   }
 
-  /* Soft muted chip — same neutral tone as category-chip, slightly compact
-     for inline list rows. Matches detail page visually. */
+  /* Soft muted chip — same warm tone, slightly compact for inline list rows. */
   .category-chip-soft {
-    @apply inline-block text-xs font-medium px-2 py-0.5 rounded-full
-           bg-secondary text-primary/75;
+    @apply inline-block text-xs font-medium px-2 py-0.5 rounded-full;
+    background: #f5f0eb;
+    color: #7a6145;
   }
 
   .tag-chip {
