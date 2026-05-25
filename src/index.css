@@ -73,18 +73,17 @@
            transition-all duration-150 placeholder:text-primary/35;
   }
 
-  /* Category chip: neutral grey, not red. Red is reserved for true primary
-     actions (copy / new prompt) so it keeps its "this is the main action"
-     signal instead of being scattered across passive metadata. */
+  /* Category chip: consistent neutral style across detail and list views.
+     Grey background with near-black text — metadata, not an action. */
   .category-chip {
     @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full bg-secondary text-primary;
   }
 
-  /* Soft muted chip — used inline in the list where a filled chip would
-     fight with card chrome. Neutral on the off-white card. */
+  /* Soft muted chip — same neutral tone as category-chip, slightly compact
+     for inline list rows. Matches detail page visually. */
   .category-chip-soft {
     @apply inline-block text-xs font-medium px-2 py-0.5 rounded-full
-           bg-accent/15 text-accent-hover;
+           bg-secondary text-primary/75;
   }
 
   .tag-chip {
