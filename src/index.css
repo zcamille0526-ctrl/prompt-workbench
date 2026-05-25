@@ -73,18 +73,18 @@
            transition-all duration-150 placeholder:text-primary/35;
   }
 
-  /* Category chip: warm amber — deeper background for contrast. */
+  /* Category chip: slate blue — professional and distinct from red actions. */
   .category-chip {
     @apply inline-block text-xs font-medium px-2.5 py-1 rounded-full;
-    background: #e8d5b7;
-    color: #3d2b0f;
+    background: #4a6fa5;
+    color: #ffffff;
   }
 
-  /* Soft muted chip — same tone, slightly compact for inline list rows. */
+  /* Soft muted chip — same slate blue, compact for inline list rows. */
   .category-chip-soft {
     @apply inline-block text-xs font-medium px-2 py-0.5 rounded-full;
-    background: #e8d5b7;
-    color: #3d2b0f;
+    background: #4a6fa5;
+    color: #ffffff;
   }
 
   .tag-chip {
